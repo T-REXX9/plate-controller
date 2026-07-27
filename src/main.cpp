@@ -1055,7 +1055,7 @@ int runCamera(
     }
     std::cout << "Camera ready in on-demand mode. YOLO and OCR are idle.\n";
     if (gateMode) {
-        std::cout << "Waiting for a grounded inductive-loop input.\n";
+        std::cout << "Waiting for a HIGH inductive-loop input.\n";
     } else if (remoteCommands) {
         std::cout << "Waiting for Capture requests from the website.\n";
     } else {

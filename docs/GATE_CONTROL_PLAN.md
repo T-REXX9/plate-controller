@@ -6,8 +6,8 @@ The Raspberry Pi uses five BCM GPIO lines:
 
 | Signal | GPIO behavior |
 | --- | --- |
-| Inductive loop | Input with pull-up; short to GND means vehicle present |
-| IR beam | Input with pull-up; short to GND means beam broken |
+| Inductive loop | Input with pull-down; 3.3 V HIGH means vehicle present |
+| IR beam | Input with pull-down; 3.3 V HIGH means beam broken |
 | Traffic selector | LOW means red; HIGH means green |
 | Open command | HIGH for one second, otherwise LOW |
 | Close command | HIGH for one second, otherwise LOW |
@@ -18,7 +18,7 @@ stop LOW, which means red traffic indication with no movement request.
 ## Automatic sequence
 
 1. The controller starts red with both movement outputs LOW.
-2. The inductive-loop switch must remain grounded for the debounce interval.
+2. The inductive-loop input must remain HIGH for the debounce interval.
 3. One cycle is locked and the reader tries one fresh 4K frame, with one
    additional frame captured only when detection or OCR is uncertain.
 4. YOLO detects the strongest plate crop in each frame.
@@ -29,18 +29,18 @@ stop LOW, which means red traffic indication with no movement request.
 8. An authorized result switches the traffic output HIGH and pulses OPEN HIGH
    for exactly one second.
 9. After the configured opening travel delay, the controller waits for the IR
-   input to be grounded, indicating that the vehicle is beneath the barrier.
-10. When the IR input opens again, it must remain clear for the configured
+   input to go HIGH, indicating that the vehicle is beneath the barrier.
+10. When the IR input returns LOW, it must remain clear for the configured
     clearance interval.
 11. Traffic switches LOW to red and CLOSE pulses HIGH for exactly one second.
 12. After the configured closing travel delay, the active cycle unlocks.
-13. A vehicle already holding the loop input grounded starts one new cycle
+13. A vehicle already holding the loop input HIGH starts one new cycle
     after debounce. Loop activity cannot start a second recognition while the
     current cycle is active.
 
 ## Obstruction behavior
 
-If the IR input becomes grounded during the closing phase, CLOSE returns LOW
+If the IR input goes HIGH during the closing phase, CLOSE returns LOW
 and the controller immediately enters opening again, switching green and
 pulsing OPEN for one second. The software never requests close while IR is
 blocked.
@@ -54,16 +54,16 @@ red, OPEN LOW, and CLOSE LOW.
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE_RED
-    IDLE_RED --> RECOGNIZING: loop grounded and debounced
+    IDLE_RED --> RECOGNIZING: loop HIGH and debounced
     RECOGNIZING --> DENIED: unreadable or unauthorized
     DENIED --> IDLE_RED: loop clear and debounced
     RECOGNIZING --> OPENING_GREEN: authorized
     OPENING_GREEN --> WAITING_FOR_IR: opening travel delay
-    WAITING_FOR_IR --> VEHICLE_UNDER_GATE: IR grounded
+    WAITING_FOR_IR --> VEHICLE_UNDER_GATE: IR HIGH
     VEHICLE_UNDER_GATE --> CLEARANCE_WAIT: IR clear
-    CLEARANCE_WAIT --> VEHICLE_UNDER_GATE: IR grounded again
+    CLEARANCE_WAIT --> VEHICLE_UNDER_GATE: IR HIGH again
     CLEARANCE_WAIT --> CLOSING_RED: continuously clear
-    CLOSING_RED --> OPENING_GREEN: IR grounded
+    CLOSING_RED --> OPENING_GREEN: IR HIGH
     CLOSING_RED --> REARMING: closing travel delay
     REARMING --> RECOGNIZING: another vehicle holds loop
     REARMING --> IDLE_RED: loop clear

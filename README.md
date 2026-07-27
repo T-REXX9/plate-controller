@@ -42,8 +42,9 @@ After wiring, enable the automatic inductive-loop sequence by editing `.env`:
 GATE_MODE=1
 ```
 
-`./start_reader.sh` will then wait for BCM17 to be shorted to ground instead of
-waiting for the dashboard Capture button.
+`./start_reader.sh` will then wait for BCM17 to go HIGH instead of waiting for
+the dashboard Capture button. BCM17 and BCM27 use internal pull-downs, so LOW is
+idle and 3.3 V HIGH means vehicle present or IR beam broken.
 
 ## Raspberry Pi 4 setup
 

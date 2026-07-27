@@ -40,7 +40,7 @@ gpiod_line* chipLine(gpiod_chip* chip, unsigned int offset) {
 
 void requestInput(gpiod_line* line, const char* name) {
     if (gpiod_line_request_input_flags(
-        line, name, GPIOD_LINE_REQUEST_FLAG_BIAS_PULL_UP
+        line, name, GPIOD_LINE_REQUEST_FLAG_BIAS_PULL_DOWN
     ) < 0) {
         throw std::runtime_error(std::string("Unable to request input ") + name);
     }
@@ -52,12 +52,12 @@ void requestOutput(gpiod_line* line, const char* name) {
     }
 }
 
-bool readGrounded(gpiod_line* line, const char* name) {
+bool readActiveHigh(gpiod_line* line, const char* name) {
     const int value = gpiod_line_get_value(line);
     if (value < 0) {
         throw std::runtime_error(std::string("Unable to read input ") + name);
     }
-    return value == 0;
+    return value == 1;
 }
 
 void writeValue(gpiod_line* line, bool value, bool& cached, const char* name) {
@@ -101,7 +101,7 @@ gpiod_line_request* requestLines(
                 inputSettings, GPIOD_LINE_DIRECTION_INPUT
             ) < 0 ||
             gpiod_line_settings_set_bias(
-                inputSettings, GPIOD_LINE_BIAS_PULL_UP
+                inputSettings, GPIOD_LINE_BIAS_PULL_DOWN
             ) < 0 ||
             gpiod_line_settings_set_direction(
                 outputSettings, GPIOD_LINE_DIRECTION_OUTPUT
@@ -109,7 +109,7 @@ gpiod_line_request* requestLines(
             gpiod_line_settings_set_output_value(
                 outputSettings, GPIOD_LINE_VALUE_INACTIVE
             ) < 0) {
-            throw std::runtime_error("Unable to configure GPIO directions or pull-ups");
+            throw std::runtime_error("Unable to configure GPIO directions or pull-downs");
         }
         const unsigned int inputOffsets[] = {pins.loop, pins.passage};
         const unsigned int outputOffsets[] = {pins.traffic, pins.open, pins.close};
@@ -142,12 +142,16 @@ gpiod_line_request* requestLines(
     return request;
 }
 
-bool readGrounded(gpiod_line_request* request, unsigned int offset, const char* name) {
+bool readActiveHigh(
+    gpiod_line_request* request,
+    unsigned int offset,
+    const char* name
+) {
     const gpiod_line_value value = gpiod_line_request_get_value(request, offset);
     if (value == GPIOD_LINE_VALUE_ERROR) {
         throw std::runtime_error(std::string("Unable to read input ") + name);
     }
-    return value == GPIOD_LINE_VALUE_INACTIVE;
+    return value == GPIOD_LINE_VALUE_ACTIVE;
 }
 
 void writeValue(
@@ -232,13 +236,13 @@ RaspberryPiGpio::~RaspberryPiGpio() {
 Inputs RaspberryPiGpio::readInputs() const {
 #ifdef PLATE_GPIOD_V1
     return {
-        readGrounded(impl_->loop, "plate-loop"),
-        readGrounded(impl_->passage, "plate-ir-beam")
+        readActiveHigh(impl_->loop, "plate-loop"),
+        readActiveHigh(impl_->passage, "plate-ir-beam")
     };
 #else
     return {
-        readGrounded(impl_->request, impl_->pins.loop, "plate-loop"),
-        readGrounded(impl_->request, impl_->pins.passage, "plate-ir-beam")
+        readActiveHigh(impl_->request, impl_->pins.loop, "plate-loop"),
+        readActiveHigh(impl_->request, impl_->pins.passage, "plate-ir-beam")
     };
 #endif
 }
