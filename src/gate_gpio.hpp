@@ -15,6 +15,11 @@ struct GpioPins {
     unsigned int close = 24;
 };
 
+// The barrier control interface is active-low: a logical request drives LOW.
+constexpr bool barrierLineLevel(bool requestActive) noexcept {
+    return !requestActive;
+}
+
 class RaspberryPiGpio {
 public:
     explicit RaspberryPiGpio(

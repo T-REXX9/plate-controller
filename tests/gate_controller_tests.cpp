@@ -1,4 +1,4 @@
-#include "gate_controller.hpp"
+#include "gate_gpio.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -14,6 +14,11 @@ void require(bool condition, const std::string& message) {
         std::cerr << "FAILED: " << message << '\n';
         std::exit(1);
     }
+}
+
+void activeLowBarrierLevels() {
+    require(gate::barrierLineLevel(false), "inactive barrier request maps to HIGH");
+    require(!gate::barrierLineLevel(true), "active barrier request maps to LOW");
 }
 
 struct Fixture {
@@ -45,9 +50,9 @@ void authorizedCycleAndWaitingVehicle() {
     require(status.outputs.trafficGreen, "authorized movement shows green");
 
     status = fixture.update(999);
-    require(status.outputs.requestOpen, "open pulse remains high before one second");
+    require(status.outputs.requestOpen, "open request remains active before one second");
     status = fixture.update(1);
-    require(!status.outputs.requestOpen, "open pulse returns low after one second");
+    require(!status.outputs.requestOpen, "open request becomes inactive after one second");
 
     require(fixture.update(fixture.config.openingTravelTime.count() - 1000).state == State::GateOpen,
             "opening travel delay completes");
@@ -64,7 +69,7 @@ void authorizedCycleAndWaitingVehicle() {
     require(!status.outputs.trafficGreen, "closing shows red");
 
     status = fixture.update(1000);
-    require(!status.outputs.requestClose, "close pulse returns low after one second");
+    require(!status.outputs.requestClose, "close request becomes inactive after one second");
     require(fixture.update(fixture.config.closingTravelTime.count() - 1000).state == State::Rearming,
             "closing travel delay ends movement cycle");
     fixture.update();
@@ -132,6 +137,7 @@ void faultsAreFailSafe() {
 }  // namespace
 
 int main() {
+    activeLowBarrierLevels();
     authorizedCycleAndWaitingVehicle();
     denialRequiresLoopClear();
     obstructionReopensAndBlocksCloseRelay();

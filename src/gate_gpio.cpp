@@ -11,8 +11,8 @@ namespace gate {
 struct RaspberryPiGpio::Impl {
     GpioPins pins;
     bool trafficValue = false;
-    bool openValue = false;
-    bool closeValue = false;
+    bool openValue = true;
+    bool closeValue = true;
 
 #ifdef PLATE_GPIOD_V1
     gpiod_chip* chip = nullptr;
@@ -40,24 +40,24 @@ gpiod_line* chipLine(gpiod_chip* chip, unsigned int offset) {
 
 void requestInput(gpiod_line* line, const char* name) {
     if (gpiod_line_request_input_flags(
-        line, name, GPIOD_LINE_REQUEST_FLAG_BIAS_PULL_DOWN
+        line, name, GPIOD_LINE_REQUEST_FLAG_BIAS_PULL_UP
     ) < 0) {
         throw std::runtime_error(std::string("Unable to request input ") + name);
     }
 }
 
-void requestOutput(gpiod_line* line, const char* name) {
-    if (gpiod_line_request_output(line, name, 0) < 0) {
+void requestOutput(gpiod_line* line, const char* name, int initialValue) {
+    if (gpiod_line_request_output(line, name, initialValue) < 0) {
         throw std::runtime_error(std::string("Unable to request output ") + name);
     }
 }
 
-bool readActiveHigh(gpiod_line* line, const char* name) {
+bool readActiveLow(gpiod_line* line, const char* name) {
     const int value = gpiod_line_get_value(line);
     if (value < 0) {
         throw std::runtime_error(std::string("Unable to read input ") + name);
     }
-    return value == 1;
+    return value == 0;
 }
 
 void writeValue(gpiod_line* line, bool value, bool& cached, const char* name) {
@@ -85,39 +85,52 @@ gpiod_line_request* requestLines(
         throw std::runtime_error("Unable to open GPIO chip " + chipPath);
     }
     gpiod_line_settings* inputSettings = nullptr;
-    gpiod_line_settings* outputSettings = nullptr;
+    gpiod_line_settings* trafficSettings = nullptr;
+    gpiod_line_settings* movementSettings = nullptr;
     gpiod_line_config* lineConfig = nullptr;
     gpiod_request_config* requestConfig = nullptr;
     gpiod_line_request* request = nullptr;
     try {
         inputSettings = gpiod_line_settings_new();
-        outputSettings = gpiod_line_settings_new();
+        trafficSettings = gpiod_line_settings_new();
+        movementSettings = gpiod_line_settings_new();
         lineConfig = gpiod_line_config_new();
         requestConfig = gpiod_request_config_new();
-        if (!inputSettings || !outputSettings || !lineConfig || !requestConfig) {
+        if (!inputSettings || !trafficSettings || !movementSettings ||
+            !lineConfig || !requestConfig) {
             throw std::runtime_error("Unable to allocate GPIO configuration");
         }
         if (gpiod_line_settings_set_direction(
                 inputSettings, GPIOD_LINE_DIRECTION_INPUT
             ) < 0 ||
             gpiod_line_settings_set_bias(
-                inputSettings, GPIOD_LINE_BIAS_PULL_DOWN
+                inputSettings, GPIOD_LINE_BIAS_PULL_UP
             ) < 0 ||
             gpiod_line_settings_set_direction(
-                outputSettings, GPIOD_LINE_DIRECTION_OUTPUT
+                trafficSettings, GPIOD_LINE_DIRECTION_OUTPUT
             ) < 0 ||
             gpiod_line_settings_set_output_value(
-                outputSettings, GPIOD_LINE_VALUE_INACTIVE
+                trafficSettings, GPIOD_LINE_VALUE_INACTIVE
+            ) < 0 ||
+            gpiod_line_settings_set_direction(
+                movementSettings, GPIOD_LINE_DIRECTION_OUTPUT
+            ) < 0 ||
+            gpiod_line_settings_set_output_value(
+                movementSettings, GPIOD_LINE_VALUE_ACTIVE
             ) < 0) {
-            throw std::runtime_error("Unable to configure GPIO directions or pull-downs");
+            throw std::runtime_error("Unable to configure GPIO directions or defaults");
         }
         const unsigned int inputOffsets[] = {pins.loop, pins.passage};
-        const unsigned int outputOffsets[] = {pins.traffic, pins.open, pins.close};
+        const unsigned int trafficOffsets[] = {pins.traffic};
+        const unsigned int movementOffsets[] = {pins.open, pins.close};
         if (gpiod_line_config_add_line_settings(
                 lineConfig, inputOffsets, 2, inputSettings
             ) < 0 ||
             gpiod_line_config_add_line_settings(
-                lineConfig, outputOffsets, 3, outputSettings
+                lineConfig, trafficOffsets, 1, trafficSettings
+            ) < 0 ||
+            gpiod_line_config_add_line_settings(
+                lineConfig, movementOffsets, 2, movementSettings
             ) < 0) {
             throw std::runtime_error("Unable to assign GPIO line settings");
         }
@@ -129,20 +142,22 @@ gpiod_line_request* requestLines(
     } catch (...) {
         gpiod_request_config_free(requestConfig);
         gpiod_line_config_free(lineConfig);
-        gpiod_line_settings_free(outputSettings);
+        gpiod_line_settings_free(movementSettings);
+        gpiod_line_settings_free(trafficSettings);
         gpiod_line_settings_free(inputSettings);
         gpiod_chip_close(chip);
         throw;
     }
     gpiod_request_config_free(requestConfig);
     gpiod_line_config_free(lineConfig);
-    gpiod_line_settings_free(outputSettings);
+    gpiod_line_settings_free(movementSettings);
+    gpiod_line_settings_free(trafficSettings);
     gpiod_line_settings_free(inputSettings);
     gpiod_chip_close(chip);
     return request;
 }
 
-bool readActiveHigh(
+bool readActiveLow(
     gpiod_line_request* request,
     unsigned int offset,
     const char* name
@@ -151,7 +166,7 @@ bool readActiveHigh(
     if (value == GPIOD_LINE_VALUE_ERROR) {
         throw std::runtime_error(std::string("Unable to read input ") + name);
     }
-    return value == GPIOD_LINE_VALUE_ACTIVE;
+    return value == GPIOD_LINE_VALUE_INACTIVE;
 }
 
 void writeValue(
@@ -200,9 +215,9 @@ RaspberryPiGpio::RaspberryPiGpio(const std::string& chipPath, GpioPins pins)
         impl_->close = chipLine(impl_->chip, pins.close);
         requestInput(impl_->loop, "plate-loop");
         requestInput(impl_->passage, "plate-ir-beam");
-        requestOutput(impl_->traffic, "plate-traffic");
-        requestOutput(impl_->open, "plate-open");
-        requestOutput(impl_->close, "plate-close");
+        requestOutput(impl_->traffic, "plate-traffic", 0);
+        requestOutput(impl_->open, "plate-open", 1);
+        requestOutput(impl_->close, "plate-close", 1);
     } catch (...) {
         if (impl_->loop) gpiod_line_release(impl_->loop);
         if (impl_->passage) gpiod_line_release(impl_->passage);
@@ -236,13 +251,13 @@ RaspberryPiGpio::~RaspberryPiGpio() {
 Inputs RaspberryPiGpio::readInputs() const {
 #ifdef PLATE_GPIOD_V1
     return {
-        readActiveHigh(impl_->loop, "plate-loop"),
-        readActiveHigh(impl_->passage, "plate-ir-beam")
+        readActiveLow(impl_->loop, "plate-loop"),
+        readActiveLow(impl_->passage, "plate-ir-beam")
     };
 #else
     return {
-        readActiveHigh(impl_->request, impl_->pins.loop, "plate-loop"),
-        readActiveHigh(impl_->request, impl_->pins.passage, "plate-ir-beam")
+        readActiveLow(impl_->request, impl_->pins.loop, "plate-loop"),
+        readActiveLow(impl_->request, impl_->pins.passage, "plate-ir-beam")
     };
 #endif
 }
@@ -268,14 +283,14 @@ void RaspberryPiGpio::applyOutputs(const Outputs& outputs) {
 #endif
     };
     if (outputs.requestOpen) {
-        setClose(false);
-        setOpen(true);
+        setClose(barrierLineLevel(false));
+        setOpen(barrierLineLevel(true));
     } else if (outputs.requestClose) {
-        setOpen(false);
-        setClose(true);
+        setOpen(barrierLineLevel(false));
+        setClose(barrierLineLevel(true));
     } else {
-        setOpen(false);
-        setClose(false);
+        setOpen(barrierLineLevel(false));
+        setClose(barrierLineLevel(false));
     }
 #ifdef PLATE_GPIOD_V1
     writeValue(
@@ -295,24 +310,24 @@ void RaspberryPiGpio::applyOutputs(const Outputs& outputs) {
 void RaspberryPiGpio::safeOutputs() noexcept {
     if (!impl_) return;
 #ifdef PLATE_GPIOD_V1
-    if (impl_->open) gpiod_line_set_value(impl_->open, 0);
-    if (impl_->close) gpiod_line_set_value(impl_->close, 0);
+    if (impl_->open) gpiod_line_set_value(impl_->open, 1);
+    if (impl_->close) gpiod_line_set_value(impl_->close, 1);
     if (impl_->traffic) gpiod_line_set_value(impl_->traffic, 0);
 #else
     if (impl_->request) {
         gpiod_line_request_set_value(
-            impl_->request, impl_->pins.open, GPIOD_LINE_VALUE_INACTIVE
+            impl_->request, impl_->pins.open, GPIOD_LINE_VALUE_ACTIVE
         );
         gpiod_line_request_set_value(
-            impl_->request, impl_->pins.close, GPIOD_LINE_VALUE_INACTIVE
+            impl_->request, impl_->pins.close, GPIOD_LINE_VALUE_ACTIVE
         );
         gpiod_line_request_set_value(
             impl_->request, impl_->pins.traffic, GPIOD_LINE_VALUE_INACTIVE
         );
     }
 #endif
-    impl_->openValue = false;
-    impl_->closeValue = false;
+    impl_->openValue = true;
+    impl_->closeValue = true;
     impl_->trafficValue = false;
 }
 

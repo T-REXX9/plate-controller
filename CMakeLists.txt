@@ -35,7 +35,12 @@ target_link_libraries(plate_reader PRIVATE gate_control)
 if(PLATE_ENABLE_GPIO)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(GPIOD REQUIRED IMPORTED_TARGET libgpiod)
-    target_sources(plate_reader PRIVATE src/gate_gpio.cpp)
+    target_sources(
+        plate_reader
+        PRIVATE
+            src/camera_status_led.cpp
+            src/gate_gpio.cpp
+    )
     target_compile_definitions(plate_reader PRIVATE PLATE_ENABLE_GPIO=1)
     if(GPIOD_VERSION VERSION_LESS "2.0")
         target_compile_definitions(plate_reader PRIVATE PLATE_GPIOD_V1=1)

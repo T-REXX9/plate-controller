@@ -39,6 +39,7 @@ struct Inputs {
 };
 
 struct Outputs {
+    // Logical requests; the GPIO adapter drives the selected barrier pin LOW.
     bool requestOpen = false;
     bool requestClose = false;
     // LOW means red and HIGH means green on the single traffic selector pin.

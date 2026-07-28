@@ -22,6 +22,7 @@
 #ifdef PLATE_ENABLE_CAMERA
 #include "gate_controller.hpp"
 #ifdef PLATE_ENABLE_GPIO
+#include "camera_status_led.hpp"
 #include "gate_gpio.hpp"
 #endif
 #include <curl/curl.h>
@@ -874,6 +875,30 @@ int runCamera(
     bool gateMode
 ) {
     std::cout << std::unitbuf;
+#ifdef PLATE_ENABLE_GPIO
+    std::unique_ptr<gate::CameraStatusLed> cameraStatusLed;
+    unsigned int cameraStatusLedGpio = 25;
+    try {
+        const long configuredLedGpio = environmentLong("CAMERA_STATUS_LED_GPIO", 25);
+        if (configuredLedGpio < 0 || configuredLedGpio > 27) {
+            throw std::runtime_error(
+                "CAMERA_STATUS_LED_GPIO must be a BCM GPIO number from 0 to 27"
+            );
+        }
+        cameraStatusLedGpio = static_cast<unsigned int>(configuredLedGpio);
+        const std::string chipPath = std::getenv("GATE_GPIO_CHIP")
+            ? std::getenv("GATE_GPIO_CHIP")
+            : "/dev/gpiochip0";
+        cameraStatusLed = std::make_unique<gate::CameraStatusLed>(
+            chipPath, cameraStatusLedGpio
+        );
+        std::cout << "Camera status LED ready on BCM" << cameraStatusLedGpio
+                  << " (currently off).\n";
+    } catch (const std::exception& error) {
+        std::cerr << "Unable to start camera status LED: " << error.what() << '\n';
+        return 1;
+    }
+#endif
     int requestedWidth = 3840;
     int requestedHeight = 2160;
     int requestedFps = 30;
@@ -975,6 +1000,24 @@ int runCamera(
             << ". Check the selected /dev/video device and its supported modes "
             << "with v4l2-ctl --list-formats-ext.\n";
     }
+#ifdef PLATE_ENABLE_GPIO
+    try {
+        cameraStatusLed->setRecognized(true);
+        std::cout << "CAMERA RECOGNIZED: status LED is on.\n";
+    } catch (const std::exception& error) {
+        std::cerr << "Unable to turn on camera status LED: " << error.what() << '\n';
+        camera.release();
+        return 1;
+    }
+#endif
+    const auto turnOffLedIfCameraDisconnected = [&]() {
+#if defined(PLATE_ENABLE_GPIO) && !defined(__APPLE__)
+        const fs::path cameraDevice = "/dev/video" + std::to_string(cameraIndex);
+        if (!fs::exists(cameraDevice)) {
+            cameraStatusLed->off();
+        }
+#endif
+    };
 
     fs::create_directories(outputDirectory);
     const fs::path cropDirectory = outputDirectory / "Plate-Crops";
@@ -1026,6 +1069,15 @@ int runCamera(
         pins.traffic = static_cast<unsigned int>(environmentLong("GATE_TRAFFIC_GPIO", 22));
         pins.open = static_cast<unsigned int>(environmentLong("GATE_OPEN_GPIO", 23));
         pins.close = static_cast<unsigned int>(environmentLong("GATE_CLOSE_GPIO", 24));
+        if (pins.loop == cameraStatusLedGpio ||
+            pins.passage == cameraStatusLedGpio ||
+            pins.traffic == cameraStatusLedGpio ||
+            pins.open == cameraStatusLedGpio ||
+            pins.close == cameraStatusLedGpio) {
+            throw std::runtime_error(
+                "CAMERA_STATUS_LED_GPIO conflicts with a gate GPIO assignment"
+            );
+        }
         const std::string chipPath = std::getenv("GATE_GPIO_CHIP")
             ? std::getenv("GATE_GPIO_CHIP")
             : "/dev/gpiochip0";
@@ -1055,7 +1107,7 @@ int runCamera(
     }
     std::cout << "Camera ready in on-demand mode. YOLO and OCR are idle.\n";
     if (gateMode) {
-        std::cout << "Waiting for a HIGH inductive-loop input.\n";
+        std::cout << "Waiting for a grounded inductive-loop input.\n";
     } else if (remoteCommands) {
         std::cout << "Waiting for Capture requests from the website.\n";
     } else {
@@ -1073,6 +1125,7 @@ int runCamera(
         if (gateMode) {
 #ifdef PLATE_ENABLE_GPIO
             while (command.empty()) {
+                turnOffLedIfCameraDisconnected();
                 try {
                     const gate::Inputs inputs = gateGpio->readInputs();
                     const gate::Snapshot status = gateController->update(
@@ -1103,6 +1156,7 @@ int runCamera(
         } else if (remoteCommands) {
             auto lastError = std::chrono::steady_clock::time_point{};
             while (command.empty()) {
+                turnOffLedIfCameraDisconnected();
                 std::string pollError;
                 const RemoteCommandPoll result = pollRemoteCommand(
                     serverUrl,
@@ -1131,6 +1185,7 @@ int runCamera(
             }
         } else {
             while (command.empty()) {
+                turnOffLedIfCameraDisconnected();
                 std::ifstream input(commandFile);
                 if (input) {
                     std::getline(input, command);
@@ -1219,6 +1274,9 @@ int runCamera(
                 );
                 return false;
             }
+#ifdef PLATE_ENABLE_GPIO
+            cameraStatusLed->setRecognized(true);
+#endif
             frames.push_back(frame.clone());
             framesMilliseconds += millisecondsBetween(
                 frameStartedAt,
@@ -1340,6 +1398,9 @@ int runCamera(
         }
 
         if (frames.empty()) {
+#ifdef PLATE_ENABLE_GPIO
+            cameraStatusLed->off();
+#endif
             const auto elapsed = millisecondsBetween(
                 startedAt,
                 std::chrono::steady_clock::now()

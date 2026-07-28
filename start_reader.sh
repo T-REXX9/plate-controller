@@ -20,6 +20,7 @@ set +a
 : "${CAMERA_HEIGHT:=2160}"
 : "${CAMERA_FPS:=30}"
 : "${CAMERA_FOURCC:=MJPG}"
+: "${CAMERA_STATUS_LED_GPIO:=25}"
 : "${GATE_MODE:=0}"
 : "${PLATE_OUTPUT_DIR:=$project_dir/Output}"
 
@@ -37,9 +38,14 @@ if [[ ${#CAMERA_FOURCC} -ne 4 ]]; then
     echo "CAMERA_FOURCC must contain exactly four characters, such as MJPG."
     exit 1
 fi
+if [[ ! "$CAMERA_STATUS_LED_GPIO" =~ ^([0-9]|1[0-9]|2[0-7])$ ]]; then
+    echo "CAMERA_STATUS_LED_GPIO must be a BCM GPIO number from 0 to 27."
+    exit 1
+fi
 
 PLATE_SERVER_URL="${PLATE_SERVER_URL%/}"
-export PLATE_SERVER_URL CAMERA_INDEX CAMERA_WIDTH CAMERA_HEIGHT CAMERA_FPS CAMERA_FOURCC
+export PLATE_SERVER_URL CAMERA_INDEX CAMERA_WIDTH CAMERA_HEIGHT CAMERA_FPS \
+    CAMERA_FOURCC CAMERA_STATUS_LED_GPIO
 mkdir -p "$PLATE_OUTPUT_DIR"
 
 if ! curl --fail --silent --show-error --connect-timeout 3 --max-time 5 \
