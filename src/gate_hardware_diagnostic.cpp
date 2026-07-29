@@ -71,27 +71,30 @@ int barrierTest(
         return 2;
     }
 
-    std::cout << "Pulsing OPEN for " << pulseDuration.count() << " ms.\n";
+    std::cout << "[ACTION] Pulsing barrier OPEN for "
+              << pulseDuration.count() << " ms................";
     pulse(gpio, true, pulseDuration);
+    std::cout << "[DONE]\n";
     gate::Outputs openIndicators;
     openIndicators.trafficGreen = true;
     gpio.applyOutputs(openIndicators);
     std::this_thread::sleep_for(openingDuration);
 
-    std::cout << "Barrier opened. Holding for " << holdDuration.count()
+    std::cout << "[ WAIT ] Barrier open; holding for " << holdDuration.count()
               << " ms.\n";
     std::this_thread::sleep_for(holdDuration);
 
-    std::cout << "Waiting for the IR beam to remain clear before closing.\n";
+    std::cout << "[ SCAN ] Waiting for IR beam clearance before closing.\n";
     while (true) {
         if (sleepMonitoringBeam(gpio, clearanceDuration)) break;
-        std::cout << "IR beam is obstructed; barrier will remain open.\n";
+        std::cout << "[ WARN ] IR beam obstructed; barrier remains open.\n";
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     gate::Outputs redIndicators;
     gpio.applyOutputs(redIndicators);
-    std::cout << "Pulsing CLOSE for " << pulseDuration.count() << " ms.\n";
+    std::cout << "[ACTION] Pulsing barrier CLOSE for "
+              << pulseDuration.count() << " ms...............";
     gate::Outputs closing;
     closing.requestClose = true;
     gpio.applyOutputs(closing);
@@ -101,12 +104,13 @@ int barrierTest(
     while (std::chrono::steady_clock::now() < closingEnds) {
         if (gpio.readInputs().passageBlocked) {
             gpio.safeOutputs();
+            std::cout << "[ABORT]\n";
             std::cerr
-                << "IR BEAM BROKEN DURING CLOSING: reopening the barrier.\n";
+                << "[ FAIL ] IR beam broken during closing; reopening.\n";
             pulse(gpio, true, pulseDuration);
             std::cerr
-                << "Barrier left OPEN. Clear the obstruction before restarting "
-                   "the controller.\n";
+                << "[!!] Barrier left OPEN. Clear the obstruction before "
+                   "restarting the controller.\n";
             return 20;
         }
         if (std::chrono::steady_clock::now() >= pulseEnds) {
@@ -115,7 +119,8 @@ int barrierTest(
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     gpio.safeOutputs();
-    std::cout << "Barrier open/close test completed safely.\n";
+    std::cout << "[DONE]\n";
+    std::cout << "[ PASS ] Barrier open/close cycle completed safely.\n";
     return 0;
 }
 
@@ -123,6 +128,7 @@ int barrierTest(
 
 int main(int argc, char** argv) {
     try {
+        std::cout << std::unitbuf;
         gate::GpioPins pins;
         pins.loop = gpioEnvironment("GATE_LOOP_GPIO", 17);
         pins.passage = gpioEnvironment("GATE_PASSAGE_GPIO", 27);
@@ -134,12 +140,11 @@ int main(int argc, char** argv) {
             : "/dev/gpiochip0";
 
         gate::RaspberryPiGpio gpio(chipPath, pins);
-        const gate::Inputs inputs = gpio.readInputs();
-        std::cout << "LOOP_PRESENT=" << (inputs.loopPresent ? 1 : 0) << '\n'
-                  << "IR_BEAM_BROKEN=" << (inputs.passageBlocked ? 1 : 0)
-                  << '\n';
-
         if (argc < 2 || std::string(argv[1]) == "status") {
+            const gate::Inputs inputs = gpio.readInputs();
+            std::cout << "LOOP_PRESENT=" << (inputs.loopPresent ? 1 : 0) << '\n'
+                      << "IR_BEAM_BROKEN="
+                      << (inputs.passageBlocked ? 1 : 0) << '\n';
             return 0;
         }
         if (std::string(argv[1]) != "barrier-test") {
