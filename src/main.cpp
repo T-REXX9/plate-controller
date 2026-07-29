@@ -22,8 +22,8 @@
 #ifdef PLATE_ENABLE_CAMERA
 #include "gate_controller.hpp"
 #ifdef PLATE_ENABLE_GPIO
-#include "camera_status_led.hpp"
 #include "gate_gpio.hpp"
+#include "status_leds.hpp"
 #endif
 #include <curl/curl.h>
 #include <opencv2/highgui.hpp>
@@ -667,6 +667,39 @@ std::string serverEndpoint(const std::string& serverUrl, const std::string& path
     return endpoint + path;
 }
 
+bool serverHealthCheck(const std::string& serverUrl, std::string& errorMessage) {
+    errorMessage.clear();
+    if (serverUrl.empty()) {
+        errorMessage = "PLATE_SERVER_URL is not configured";
+        return false;
+    }
+    CURL* client = curl_easy_init();
+    if (!client) {
+        errorMessage = "unable to initialize HTTP client";
+        return false;
+    }
+    std::string responseBody;
+    const std::string endpoint = serverEndpoint(serverUrl, "/health");
+    curl_easy_setopt(client, CURLOPT_URL, endpoint.c_str());
+    curl_easy_setopt(client, CURLOPT_CONNECTTIMEOUT_MS, 2000L);
+    curl_easy_setopt(client, CURLOPT_TIMEOUT_MS, 4000L);
+    curl_easy_setopt(client, CURLOPT_WRITEFUNCTION, appendHttpResponse);
+    curl_easy_setopt(client, CURLOPT_WRITEDATA, &responseBody);
+    const CURLcode result = curl_easy_perform(client);
+    long status = 0;
+    curl_easy_getinfo(client, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_cleanup(client);
+    if (result != CURLE_OK) {
+        errorMessage = curl_easy_strerror(result);
+        return false;
+    }
+    if (status < 200 || status >= 300) {
+        errorMessage = "website returned HTTP " + std::to_string(status);
+        return false;
+    }
+    return true;
+}
+
 bool parseJsonLong(const std::string& body, const std::string& field, long& value) {
     const std::string key = "\"" + field + "\"";
     std::size_t position = body.find(key);
@@ -876,26 +909,40 @@ int runCamera(
 ) {
     std::cout << std::unitbuf;
 #ifdef PLATE_ENABLE_GPIO
-    std::unique_ptr<gate::CameraStatusLed> cameraStatusLed;
-    unsigned int cameraStatusLedGpio = 25;
+    std::unique_ptr<gate::StatusLeds> statusLeds;
+    gate::StatusLedPins statusLedPins;
     try {
-        const long configuredLedGpio = environmentLong("CAMERA_STATUS_LED_GPIO", 25);
-        if (configuredLedGpio < 0 || configuredLedGpio > 27) {
-            throw std::runtime_error(
-                "CAMERA_STATUS_LED_GPIO must be a BCM GPIO number from 0 to 27"
-            );
-        }
-        cameraStatusLedGpio = static_cast<unsigned int>(configuredLedGpio);
+        const auto configuredGpio = [](const char* name, long fallback) {
+            const long value = environmentLong(name, fallback);
+            if (value < 0 || value > 27) {
+                throw std::runtime_error(
+                    std::string(name) + " must be a BCM GPIO number from 0 to 27"
+                );
+            }
+            return static_cast<unsigned int>(value);
+        };
+        statusLedPins.camera = configuredGpio("CAMERA_STATUS_LED_GPIO", 25);
+        statusLedPins.server = configuredGpio("SERVER_STATUS_LED_GPIO", 5);
+        statusLedPins.loop = configuredGpio("LOOP_STATUS_LED_GPIO", 6);
+        statusLedPins.barrierOpen = configuredGpio(
+            "BARRIER_OPEN_STATUS_LED_GPIO", 12
+        );
+        statusLedPins.plateUnrecognized = configuredGpio(
+            "PLATE_UNRECOGNIZED_LED_GPIO", 13
+        );
         const std::string chipPath = std::getenv("GATE_GPIO_CHIP")
             ? std::getenv("GATE_GPIO_CHIP")
             : "/dev/gpiochip0";
-        cameraStatusLed = std::make_unique<gate::CameraStatusLed>(
-            chipPath, cameraStatusLedGpio
-        );
-        std::cout << "Camera status LED ready on BCM" << cameraStatusLedGpio
-                  << " (currently off).\n";
+        statusLeds = std::make_unique<gate::StatusLeds>(chipPath, statusLedPins);
+        std::cout
+            << "Status LEDs ready: camera=" << statusLedPins.camera
+            << " server=" << statusLedPins.server
+            << " loop=" << statusLedPins.loop
+            << " barrier-open=" << statusLedPins.barrierOpen
+            << " plate-unrecognized=" << statusLedPins.plateUnrecognized
+            << " (all currently off).\n";
     } catch (const std::exception& error) {
-        std::cerr << "Unable to start camera status LED: " << error.what() << '\n';
+        std::cerr << "Unable to start status LEDs: " << error.what() << '\n';
         return 1;
     }
 #endif
@@ -1002,7 +1049,7 @@ int runCamera(
     }
 #ifdef PLATE_ENABLE_GPIO
     try {
-        cameraStatusLed->setRecognized(true);
+        statusLeds->setCamera(true);
         std::cout << "CAMERA RECOGNIZED: status LED is on.\n";
     } catch (const std::exception& error) {
         std::cerr << "Unable to turn on camera status LED: " << error.what() << '\n';
@@ -1014,10 +1061,28 @@ int runCamera(
 #if defined(PLATE_ENABLE_GPIO) && !defined(__APPLE__)
         const fs::path cameraDevice = "/dev/video" + std::to_string(cameraIndex);
         if (!fs::exists(cameraDevice)) {
-            cameraStatusLed->off();
+            statusLeds->setCamera(false);
         }
 #endif
     };
+#ifdef PLATE_ENABLE_GPIO
+    auto nextServerHealthCheck = std::chrono::steady_clock::time_point{};
+    const auto refreshServerIndicator = [&](bool force = false) {
+        const auto now = std::chrono::steady_clock::now();
+        if (!force && now < nextServerHealthCheck) return;
+        std::string healthError;
+        const bool healthy = serverHealthCheck(serverUrl, healthError);
+        statusLeds->setServer(healthy);
+        nextServerHealthCheck = now + std::chrono::seconds(5);
+    };
+    try {
+        refreshServerIndicator(true);
+    } catch (const std::exception& error) {
+        std::cerr << "Unable to update server status LED: " << error.what() << '\n';
+        camera.release();
+        return 1;
+    }
+#endif
 
     fs::create_directories(outputDirectory);
     const fs::path cropDirectory = outputDirectory / "Plate-Crops";
@@ -1069,13 +1134,20 @@ int runCamera(
         pins.traffic = static_cast<unsigned int>(environmentLong("GATE_TRAFFIC_GPIO", 22));
         pins.open = static_cast<unsigned int>(environmentLong("GATE_OPEN_GPIO", 23));
         pins.close = static_cast<unsigned int>(environmentLong("GATE_CLOSE_GPIO", 24));
-        if (pins.loop == cameraStatusLedGpio ||
-            pins.passage == cameraStatusLedGpio ||
-            pins.traffic == cameraStatusLedGpio ||
-            pins.open == cameraStatusLedGpio ||
-            pins.close == cameraStatusLedGpio) {
+        const auto conflictsWithStatusLed = [&statusLedPins](unsigned int pin) {
+            return pin == statusLedPins.camera ||
+                pin == statusLedPins.server ||
+                pin == statusLedPins.loop ||
+                pin == statusLedPins.barrierOpen ||
+                pin == statusLedPins.plateUnrecognized;
+        };
+        if (conflictsWithStatusLed(pins.loop) ||
+            conflictsWithStatusLed(pins.passage) ||
+            conflictsWithStatusLed(pins.traffic) ||
+            conflictsWithStatusLed(pins.open) ||
+            conflictsWithStatusLed(pins.close)) {
             throw std::runtime_error(
-                "CAMERA_STATUS_LED_GPIO conflicts with a gate GPIO assignment"
+                "A status LED GPIO conflicts with a gate GPIO assignment"
             );
         }
         const std::string chipPath = std::getenv("GATE_GPIO_CHIP")
@@ -1088,6 +1160,9 @@ int runCamera(
             std::chrono::steady_clock::now(), initialInputs
         );
         gateGpio->applyOutputs(initialStatus.outputs);
+        statusLeds->setLoop(initialInputs.loopPresent);
+        statusLeds->setBarrierOpen(false);
+        statusLeds->setPlateUnrecognized(false);
         previousGateState = initialStatus.state;
         std::cout << "Gate GPIO ready: loop=" << pins.loop
                   << " IR=" << pins.passage
@@ -1132,6 +1207,27 @@ int runCamera(
                         std::chrono::steady_clock::now(), inputs
                     );
                     gateGpio->applyOutputs(status.outputs);
+                    if (status.state == gate::State::IdleClosed) {
+                        // A health request may block briefly. Only perform it
+                        // while the barrier is closed, never during movement.
+                        refreshServerIndicator();
+                    }
+                    statusLeds->setLoop(inputs.loopPresent);
+                    if (status.state == gate::State::Opening) {
+                        statusLeds->setBarrierOpen(true);
+                    } else if (
+                        status.state == gate::State::Closing ||
+                        status.state == gate::State::Rearming ||
+                        status.state == gate::State::IdleClosed
+                    ) {
+                        statusLeds->setBarrierOpen(false);
+                    }
+                    if (
+                        status.state == gate::State::Recognizing ||
+                        status.state == gate::State::IdleClosed
+                    ) {
+                        statusLeds->setPlateUnrecognized(false);
+                    }
                     if (status.state != previousGateState) {
                         std::cout << "GATE STATE: " << gate::stateName(previousGateState)
                                   << " -> " << gate::stateName(status.state) << '\n';
@@ -1164,15 +1260,25 @@ int runCamera(
                     pollError
                 );
                 if (result == RemoteCommandPoll::Capture) {
+#ifdef PLATE_ENABLE_GPIO
+                    statusLeds->setServer(true);
+#endif
                     command = "capture";
                     std::cout << "REMOTE CAPTURE " << activeCommandId << ": received from website.\n";
                 } else if (result == RemoteCommandPoll::Error) {
+#ifdef PLATE_ENABLE_GPIO
+                    statusLeds->setServer(false);
+#endif
                     const auto now = std::chrono::steady_clock::now();
                     if (lastError.time_since_epoch().count() == 0 ||
                         now - lastError >= std::chrono::seconds(10)) {
                         std::cerr << "WEBSITE POLL FAILED: " << pollError << '\n';
                         lastError = now;
                     }
+                } else {
+#ifdef PLATE_ENABLE_GPIO
+                    statusLeds->setServer(true);
+#endif
                 }
                 if (command.empty()) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -1186,6 +1292,9 @@ int runCamera(
         } else {
             while (command.empty()) {
                 turnOffLedIfCameraDisconnected();
+#ifdef PLATE_ENABLE_GPIO
+                refreshServerIndicator();
+#endif
                 std::ifstream input(commandFile);
                 if (input) {
                     std::getline(input, command);
@@ -1230,6 +1339,9 @@ int runCamera(
         }
 
         ++captureNumber;
+#ifdef PLATE_ENABLE_GPIO
+        statusLeds->setPlateUnrecognized(false);
+#endif
         const auto startedAt = std::chrono::steady_clock::now();
         const auto millisecondsBetween = [](const auto& beginning, const auto& end) {
             return std::chrono::duration_cast<std::chrono::milliseconds>(end - beginning).count();
@@ -1275,7 +1387,7 @@ int runCamera(
                 return false;
             }
 #ifdef PLATE_ENABLE_GPIO
-            cameraStatusLed->setRecognized(true);
+            statusLeds->setCamera(true);
 #endif
             frames.push_back(frame.clone());
             framesMilliseconds += millisecondsBetween(
@@ -1399,7 +1511,8 @@ int runCamera(
 
         if (frames.empty()) {
 #ifdef PLATE_ENABLE_GPIO
-            cameraStatusLed->off();
+            statusLeds->setCamera(false);
+            statusLeds->setPlateUnrecognized(false);
 #endif
             const auto elapsed = millisecondsBetween(
                 startedAt,
@@ -1432,6 +1545,9 @@ int runCamera(
         }
 
         if (candidates.empty()) {
+#ifdef PLATE_ENABLE_GPIO
+            statusLeds->setPlateUnrecognized(true);
+#endif
             const auto elapsed = millisecondsBetween(
                 startedAt,
                 std::chrono::steady_clock::now()
@@ -1517,6 +1633,9 @@ int runCamera(
                 std::chrono::steady_clock::now()
             );
             if (serverSent) {
+#ifdef PLATE_ENABLE_GPIO
+                statusLeds->setServer(true);
+#endif
                 std::cout << "SERVER ACCEPTED " << plate << ' ' << serverResponse << '\n';
                 serverResultMessage = "Recognized " + plate;
                 if (!parseJsonBool(serverResponse, "authorized", authorizedByServer)) {
@@ -1524,11 +1643,19 @@ int runCamera(
                     std::cerr << "SERVER RESPONSE DID NOT INCLUDE AUTHORIZATION; access denied.\n";
                 }
             } else {
+#ifdef PLATE_ENABLE_GPIO
+                statusLeds->setServer(false);
+#endif
                 std::cerr << "SERVER SEND FAILED " << plate << ": "
                           << serverResponse << '\n';
                 serverResultMessage = "Recognition upload failed: " + serverResponse;
             }
         }
+#ifdef PLATE_ENABLE_GPIO
+        statusLeds->setPlateUnrecognized(
+            plate == "UNREADABLE" || (serverSent && !authorizedByServer)
+        );
+#endif
 
         if (!headless) {
             cv::imshow("On-demand License Plate Recognition", annotatedFrame);

@@ -64,6 +64,10 @@ camera_height=2160
 camera_fps=30
 camera_fourcc=MJPG
 camera_status_led_gpio=25
+server_status_led_gpio=5
+loop_status_led_gpio=6
+barrier_open_status_led_gpio=12
+plate_unrecognized_led_gpio=13
 echo
 echo "Using the EMEET C950 4K profile: 3840x2160, MJPEG, 30 FPS, autofocus."
 if [[ "$(uname -s)" == "Linux" ]] && command -v v4l2-ctl >/dev/null 2>&1; then
@@ -91,9 +95,12 @@ esac
 
 mkdir -p "$(dirname "$config_path")"
 umask 077
-printf 'PLATE_SERVER_URL=%s\nCAMERA_INDEX=%s\nCAMERA_WIDTH=%s\nCAMERA_HEIGHT=%s\nCAMERA_FPS=%s\nCAMERA_FOURCC=%s\nCAMERA_STATUS_LED_GPIO=%s\nGATE_MODE=%s\n' \
+printf 'PLATE_SERVER_URL=%s\nCAMERA_INDEX=%s\nCAMERA_WIDTH=%s\nCAMERA_HEIGHT=%s\nCAMERA_FPS=%s\nCAMERA_FOURCC=%s\nCAMERA_STATUS_LED_GPIO=%s\nSERVER_STATUS_LED_GPIO=%s\nLOOP_STATUS_LED_GPIO=%s\nBARRIER_OPEN_STATUS_LED_GPIO=%s\nPLATE_UNRECOGNIZED_LED_GPIO=%s\nGATE_MODE=%s\n' \
     "$server_url" "$camera_index" "$camera_width" "$camera_height" \
-    "$camera_fps" "$camera_fourcc" "$camera_status_led_gpio" "$gate_mode" > "$config_path"
+    "$camera_fps" "$camera_fourcc" "$camera_status_led_gpio" \
+    "$server_status_led_gpio" "$loop_status_led_gpio" \
+    "$barrier_open_status_led_gpio" "$plate_unrecognized_led_gpio" \
+    "$gate_mode" > "$config_path"
 chmod 600 "$config_path"
 
 if curl --fail --silent --show-error --connect-timeout 3 --max-time 5 \

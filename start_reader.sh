@@ -21,6 +21,10 @@ set +a
 : "${CAMERA_FPS:=30}"
 : "${CAMERA_FOURCC:=MJPG}"
 : "${CAMERA_STATUS_LED_GPIO:=25}"
+: "${SERVER_STATUS_LED_GPIO:=5}"
+: "${LOOP_STATUS_LED_GPIO:=6}"
+: "${BARRIER_OPEN_STATUS_LED_GPIO:=12}"
+: "${PLATE_UNRECOGNIZED_LED_GPIO:=13}"
 : "${GATE_MODE:=0}"
 : "${PLATE_OUTPUT_DIR:=$project_dir/Output}"
 
@@ -38,26 +42,43 @@ if [[ ${#CAMERA_FOURCC} -ne 4 ]]; then
     echo "CAMERA_FOURCC must contain exactly four characters, such as MJPG."
     exit 1
 fi
-if [[ ! "$CAMERA_STATUS_LED_GPIO" =~ ^([0-9]|1[0-9]|2[0-7])$ ]]; then
-    echo "CAMERA_STATUS_LED_GPIO must be a BCM GPIO number from 0 to 27."
-    exit 1
-fi
+for gpio_name in \
+    CAMERA_STATUS_LED_GPIO \
+    SERVER_STATUS_LED_GPIO \
+    LOOP_STATUS_LED_GPIO \
+    BARRIER_OPEN_STATUS_LED_GPIO \
+    PLATE_UNRECOGNIZED_LED_GPIO; do
+    gpio_value="${!gpio_name}"
+    if [[ ! "$gpio_value" =~ ^([0-9]|1[0-9]|2[0-7])$ ]]; then
+        echo "$gpio_name must be a BCM GPIO number from 0 to 27."
+        exit 1
+    fi
+done
 
 PLATE_SERVER_URL="${PLATE_SERVER_URL%/}"
 export PLATE_SERVER_URL CAMERA_INDEX CAMERA_WIDTH CAMERA_HEIGHT CAMERA_FPS \
-    CAMERA_FOURCC CAMERA_STATUS_LED_GPIO
+    CAMERA_FOURCC CAMERA_STATUS_LED_GPIO SERVER_STATUS_LED_GPIO \
+    LOOP_STATUS_LED_GPIO BARRIER_OPEN_STATUS_LED_GPIO \
+    PLATE_UNRECOGNIZED_LED_GPIO
 mkdir -p "$PLATE_OUTPUT_DIR"
 
-if ! curl --fail --silent --show-error --connect-timeout 3 --max-time 5 \
+server_available=0
+if curl --fail --silent --show-error --connect-timeout 3 --max-time 5 \
     "$PLATE_SERVER_URL/health" >/dev/null; then
-    echo "The PC website is unavailable at $PLATE_SERVER_URL."
-    echo "The reader was not started."
-    exit 1
+    server_available=1
 fi
 
-if [[ "${1:-}" == "--check" ]]; then
+if [[ "${1:-}" == "--check" && "$server_available" == "1" ]]; then
     echo "PC website connection successful: $PLATE_SERVER_URL"
     exit 0
+fi
+if [[ "${1:-}" == "--check" ]]; then
+    echo "The PC website is unavailable at $PLATE_SERVER_URL."
+    exit 1
+fi
+if [[ "$server_available" == "0" ]]; then
+    echo "Warning: the PC website is unavailable at $PLATE_SERVER_URL."
+    echo "The controller will start safely and keep the Server detected LED off."
 fi
 
 reader="$project_dir/build-pi/plate_reader"
@@ -70,7 +91,11 @@ if [[ ! -x "$reader" ]]; then
 fi
 
 cd "$project_dir"
-echo "PC website connected: $PLATE_SERVER_URL"
+if [[ "$server_available" == "1" ]]; then
+    echo "PC website connected: $PLATE_SERVER_URL"
+else
+    echo "Waiting for PC website: $PLATE_SERVER_URL"
+fi
 mode_argument="--remote-commands"
 if [[ "$GATE_MODE" == "1" ]]; then
     mode_argument="--gate"

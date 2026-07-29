@@ -31,18 +31,31 @@ Switch open   = HIGH / inactive
 
 BCM17 and BCM27 use the Raspberry Pi's internal pull-up resistors.
 
-### Camera-recognized LED
+### Status indicator LEDs
 
 ```text
-Physical pin 22 / BCM25 ── 330 Ω resistor ──►|── Physical pin 20 / GND
-                                              LED
+Camera detected       Pin 22 / BCM25 ── 330 Ω ──►|──┐
+Server detected       Pin 29 / BCM5  ── 330 Ω ──►|──┤
+Loop detector active  Pin 31 / BCM6  ── 330 Ω ──►|──┤
+Boom barrier open     Pin 32 / BCM12 ── 330 Ω ──►|──┤── Pin 34 / GND
+Plate not recognized  Pin 33 / BCM13 ── 330 Ω ──►|──┘
+                                                   LEDs
 ```
 
-Connect BCM25 through a 220–330 Ω resistor to the LED anode (long leg), then
-connect the LED cathode (short leg/flat side) to ground. The LED is off during
-startup. It turns on after the controller successfully opens, configures, and
-reads a frame from the camera. It turns off if frame capture fails or the
+Each GPIO must have its own 220–330 Ω resistor. Connect each resistor to its LED
+anode (long leg), then connect every LED cathode (short leg/flat side) to a
+Raspberry Pi ground. All indicators are active-high and turn off when the
 controller stops.
+
+Indicator meanings:
+
+- **Camera detected:** the camera opened, configured, and supplied a frame.
+- **Server detected:** the local Plate Program responded successfully.
+- **Loop detector active:** the grounded inductive-loop input reports a vehicle.
+- **Boom barrier open:** software has issued OPEN and has not begun CLOSE. This
+  is an estimate because the design has no physical barrier-position sensor.
+- **Plate not recognized:** the plate was unreadable or the server denied it.
+  A network/server failure turns off Server detected instead.
 
 ### Outputs — barrier channels require a protected active-low interface
 
@@ -79,7 +92,11 @@ Use BCM numbers in software. Physical pin numbers refer to the Raspberry Pi
 | Traffic red/green selector | 22 | 15 | LOW red, HIGH green |
 | Barrier open command | 23 | 16 | Idle HIGH; LOW for one second |
 | Barrier close command | 24 | 18 | Idle HIGH; LOW for one second |
-| Camera-recognized LED | 25 | 22 | LOW off; HIGH recognized |
+| Camera detected LED | 25 | 22 | LOW off; HIGH detected |
+| Server detected LED | 5 | 29 | LOW off; HIGH reachable |
+| Loop detector active LED | 6 | 31 | LOW off; HIGH vehicle present |
+| Boom barrier open LED | 12 | 32 | LOW closed/closing; HIGH open estimate |
+| Plate not recognized LED | 13 | 33 | LOW off; HIGH unreadable/denied |
 | Switch return/common | — | 6 | Raspberry Pi GND |
 
 Other Raspberry Pi ground pins may also be used.

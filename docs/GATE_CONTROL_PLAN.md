@@ -2,7 +2,7 @@
 
 ## Electrical contract
 
-The Raspberry Pi uses six BCM GPIO lines:
+The Raspberry Pi uses ten BCM GPIO lines:
 
 | Signal | GPIO behavior |
 | --- | --- |
@@ -12,9 +12,14 @@ The Raspberry Pi uses six BCM GPIO lines:
 | Open command | LOW for one second, otherwise HIGH |
 | Close command | LOW for one second, otherwise HIGH |
 | Camera status LED | LOW while unavailable; HIGH after a working camera is recognized |
+| Server status LED | LOW while unreachable; HIGH after a successful server response |
+| Loop status LED | LOW while clear; HIGH while a vehicle is present |
+| Barrier-open status LED | HIGH after OPEN; LOW when CLOSE begins |
+| Plate-unrecognized LED | HIGH for unreadable or denied plates |
 
 The open and close outputs are mutually exclusive. OPEN and CLOSE start and
 stop HIGH while traffic starts and stops LOW (red), meaning no movement request.
+All five status LED outputs start and stop LOW.
 
 ## Automatic sequence
 

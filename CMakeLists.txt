@@ -38,7 +38,7 @@ if(PLATE_ENABLE_GPIO)
     target_sources(
         plate_reader
         PRIVATE
-            src/camera_status_led.cpp
+            src/status_leds.cpp
             src/gate_gpio.cpp
     )
     target_compile_definitions(plate_reader PRIVATE PLATE_ENABLE_GPIO=1)

@@ -46,9 +46,17 @@ GATE_MODE=1
 waiting for the dashboard Capture button. BCM17 and BCM27 use internal pull-ups,
 so HIGH is idle and grounded LOW means vehicle present or IR beam broken.
 
-The camera-recognized indicator uses BCM25 (physical pin 22). It turns HIGH
-after the controller opens, configures, and reads a frame from the camera, and
-returns LOW when the camera is unavailable or the controller stops.
+Five active-high status indicators are available:
+
+- Camera detected: BCM25, physical pin 22.
+- Server detected: BCM5, physical pin 29.
+- Loop detector active: BCM6, physical pin 31.
+- Boom barrier open: BCM12, physical pin 32.
+- Plate not recognized: BCM13, physical pin 33.
+
+Each LED requires its own 220–330 Ω series resistor. Complete wiring and
+indicator behavior are documented in
+[`docs/GATE_WIRING_DIAGRAM.md`](docs/GATE_WIRING_DIAGRAM.md).
 
 ## Raspberry Pi 4 setup
 
