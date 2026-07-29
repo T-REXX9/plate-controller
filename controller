@@ -20,6 +20,7 @@ Plate controller management
   controller -update      Safely pull, build, test, and restart
   controller -configure   Find/configure the PC server and camera
   controller -check       Check the configured PC server connection
+  controller -diagnose    Check the camera, server, and gate sensors
   controller -start       Start the controller
   controller -stop        Stop the controller
   controller -restart     Restart the controller
@@ -39,6 +40,10 @@ case "$command_name" in
     -check|check)
         become_root "$@"
         PLATE_READER_CONFIG="$config_path" "$project_dir/start_reader.sh" --check
+        ;;
+    -diagnose|diagnose)
+        become_root "$@"
+        PLATE_READER_CONFIG="$config_path" "$project_dir/diagnose_controller.sh"
         ;;
     -start|start)
         become_root "$@"

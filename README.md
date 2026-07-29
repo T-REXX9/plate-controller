@@ -89,11 +89,19 @@ No project-directory knowledge is needed afterward. Common commands are:
 ```bash
 controller -status
 controller -logs
+controller -diagnose
 controller -update
 controller -restart
 controller -stop
 controller -start
 ```
+
+`controller -diagnose` requires confirmation before temporarily stopping the
+service, then checks the USB camera identity and test frame, Plate Program server,
+inductive-loop input, and IR-beam input. It separately warns the operator and
+requires the exact confirmation `ACTIVATE` before running a physical barrier
+open/close test. If that test is interrupted or the IR beam is broken while
+closing, the barrier reopens and the controller remains stopped for inspection.
 
 `controller -update` stops the service, fast-forwards the managed clone from the
 GitHub `main` branch, rebuilds and tests it, refreshes the service installation,

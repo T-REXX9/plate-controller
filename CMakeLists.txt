@@ -48,6 +48,25 @@ if(PLATE_ENABLE_GPIO)
         target_compile_definitions(plate_reader PRIVATE PLATE_GPIOD_V2=1)
     endif()
     target_link_libraries(plate_reader PRIVATE PkgConfig::GPIOD)
+
+    add_executable(
+        gate_hardware_diagnostic
+        src/gate_hardware_diagnostic.cpp
+        src/gate_gpio.cpp
+    )
+    target_include_directories(
+        gate_hardware_diagnostic PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    if(GPIOD_VERSION VERSION_LESS "2.0")
+        target_compile_definitions(
+            gate_hardware_diagnostic PRIVATE PLATE_GPIOD_V1=1
+        )
+    else()
+        target_compile_definitions(
+            gate_hardware_diagnostic PRIVATE PLATE_GPIOD_V2=1
+        )
+    endif()
+    target_link_libraries(gate_hardware_diagnostic PRIVATE PkgConfig::GPIOD)
 endif()
 
 add_executable(gate_simulator src/gate_simulator.cpp)
