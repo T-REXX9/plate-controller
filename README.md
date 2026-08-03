@@ -21,7 +21,8 @@ the separate PC web server and does not host a website or database.
 The safety state machine and macOS/Raspberry Pi simulator are now included.
 They implement the cycle lock, authorization/denial paths, one-second open and
 close pulses, passage clearance, obstruction reopening, waiting-vehicle
-behavior, and the single LOW-red/HIGH-green traffic output.
+behavior, the single LOW-red/HIGH-green traffic output, and an active-low RFID
+trigger synchronized with automatic camera capture.
 
 Build and run the simulator:
 
@@ -53,6 +54,11 @@ Five active-high status indicators are available:
 - Loop detector active: BCM6, physical pin 31.
 - Boom barrier open: BCM12, physical pin 32.
 - Plate not recognized: BCM13, physical pin 33.
+
+The RFID system trigger uses BCM16 (physical pin 36). It remains HIGH normally,
+switches LOW when a debounced loop detection starts camera capture, and returns
+HIGH after 1.5 seconds without delaying YOLO or OCR. Physical pins 8 and 10 are
+explicitly rejected for this output.
 
 Each LED requires its own 220–330 Ω series resistor. Complete wiring and
 indicator behavior are documented in

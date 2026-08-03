@@ -1,4 +1,5 @@
 #include "gate_gpio.hpp"
+#include "rfid_trigger_output.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -19,6 +20,13 @@ void require(bool condition, const std::string& message) {
 void activeLowBarrierLevels() {
     require(gate::barrierLineLevel(false), "inactive barrier request maps to HIGH");
     require(!gate::barrierLineLevel(true), "active barrier request maps to LOW");
+}
+
+void activeLowRfidLevels() {
+    require(gate::rfidTriggerLineLevel(false),
+            "inactive RFID trigger maps to HIGH");
+    require(!gate::rfidTriggerLineLevel(true),
+            "active RFID trigger maps to LOW");
 }
 
 struct Fixture {
@@ -138,6 +146,7 @@ void faultsAreFailSafe() {
 
 int main() {
     activeLowBarrierLevels();
+    activeLowRfidLevels();
     authorizedCycleAndWaitingVehicle();
     denialRequiresLoopClear();
     obstructionReopensAndBlocksCloseRelay();

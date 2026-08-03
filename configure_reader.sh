@@ -68,6 +68,8 @@ server_status_led_gpio=5
 loop_status_led_gpio=6
 barrier_open_status_led_gpio=12
 plate_unrecognized_led_gpio=13
+rfid_output_gpio=16
+rfid_pulse_ms=1500
 echo
 echo "Using the EMEET C950 4K profile: 3840x2160, MJPEG, 30 FPS, autofocus."
 if [[ "$(uname -s)" == "Linux" ]] && command -v v4l2-ctl >/dev/null 2>&1; then
@@ -81,7 +83,7 @@ fi
 read -r -p "Enable automatic GPIO gate mode? [y/N]: " gate_answer
 case "${gate_answer:-n}" in
     y|Y|yes|YES)
-        read -r -p "Are the two switches and all three protected 3.3 V output interfaces wired? [y/N]: " wiring_answer
+        read -r -p "Are the two switches and all four protected 3.3 V output interfaces wired? [y/N]: " wiring_answer
         case "${wiring_answer:-n}" in
             y|Y|yes|YES) gate_mode=1 ;;
             *)
@@ -95,11 +97,12 @@ esac
 
 mkdir -p "$(dirname "$config_path")"
 umask 077
-printf 'PLATE_SERVER_URL=%s\nCAMERA_INDEX=%s\nCAMERA_WIDTH=%s\nCAMERA_HEIGHT=%s\nCAMERA_FPS=%s\nCAMERA_FOURCC=%s\nCAMERA_STATUS_LED_GPIO=%s\nSERVER_STATUS_LED_GPIO=%s\nLOOP_STATUS_LED_GPIO=%s\nBARRIER_OPEN_STATUS_LED_GPIO=%s\nPLATE_UNRECOGNIZED_LED_GPIO=%s\nGATE_MODE=%s\n' \
+printf 'PLATE_SERVER_URL=%s\nCAMERA_INDEX=%s\nCAMERA_WIDTH=%s\nCAMERA_HEIGHT=%s\nCAMERA_FPS=%s\nCAMERA_FOURCC=%s\nCAMERA_STATUS_LED_GPIO=%s\nSERVER_STATUS_LED_GPIO=%s\nLOOP_STATUS_LED_GPIO=%s\nBARRIER_OPEN_STATUS_LED_GPIO=%s\nPLATE_UNRECOGNIZED_LED_GPIO=%s\nGATE_RFID_OUTPUT_GPIO=%s\nGATE_RFID_PULSE_MS=%s\nGATE_MODE=%s\n' \
     "$server_url" "$camera_index" "$camera_width" "$camera_height" \
     "$camera_fps" "$camera_fourcc" "$camera_status_led_gpio" \
     "$server_status_led_gpio" "$loop_status_led_gpio" \
     "$barrier_open_status_led_gpio" "$plate_unrecognized_led_gpio" \
+    "$rfid_output_gpio" "$rfid_pulse_ms" \
     "$gate_mode" > "$config_path"
 chmod 600 "$config_path"
 

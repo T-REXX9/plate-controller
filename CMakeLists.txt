@@ -34,12 +34,14 @@ target_link_libraries(plate_reader PRIVATE gate_control)
 
 if(PLATE_ENABLE_GPIO)
     find_package(PkgConfig REQUIRED)
+    find_package(Threads REQUIRED)
     pkg_check_modules(GPIOD REQUIRED IMPORTED_TARGET libgpiod)
     target_sources(
         plate_reader
         PRIVATE
             src/status_leds.cpp
             src/gate_gpio.cpp
+            src/rfid_trigger_output.cpp
     )
     target_compile_definitions(plate_reader PRIVATE PLATE_ENABLE_GPIO=1)
     if(GPIOD_VERSION VERSION_LESS "2.0")
@@ -47,7 +49,9 @@ if(PLATE_ENABLE_GPIO)
     else()
         target_compile_definitions(plate_reader PRIVATE PLATE_GPIOD_V2=1)
     endif()
-    target_link_libraries(plate_reader PRIVATE PkgConfig::GPIOD)
+    target_link_libraries(
+        plate_reader PRIVATE PkgConfig::GPIOD Threads::Threads
+    )
 
     add_executable(
         gate_hardware_diagnostic

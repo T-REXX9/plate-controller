@@ -25,6 +25,8 @@ set +a
 : "${LOOP_STATUS_LED_GPIO:=6}"
 : "${BARRIER_OPEN_STATUS_LED_GPIO:=12}"
 : "${PLATE_UNRECOGNIZED_LED_GPIO:=13}"
+: "${GATE_RFID_OUTPUT_GPIO:=16}"
+: "${GATE_RFID_PULSE_MS:=1500}"
 : "${GATE_MODE:=0}"
 : "${PLATE_OUTPUT_DIR:=$project_dir/Output}"
 
@@ -47,19 +49,29 @@ for gpio_name in \
     SERVER_STATUS_LED_GPIO \
     LOOP_STATUS_LED_GPIO \
     BARRIER_OPEN_STATUS_LED_GPIO \
-    PLATE_UNRECOGNIZED_LED_GPIO; do
+    PLATE_UNRECOGNIZED_LED_GPIO \
+    GATE_RFID_OUTPUT_GPIO; do
     gpio_value="${!gpio_name}"
     if [[ ! "$gpio_value" =~ ^([0-9]|1[0-9]|2[0-7])$ ]]; then
         echo "$gpio_name must be a BCM GPIO number from 0 to 27."
         exit 1
     fi
 done
+if [[ "$GATE_RFID_OUTPUT_GPIO" == "14" || "$GATE_RFID_OUTPUT_GPIO" == "15" ]]; then
+    echo "GATE_RFID_OUTPUT_GPIO cannot use physical pin 8 or 10 (BCM14/BCM15)."
+    exit 1
+fi
+if [[ ! "$GATE_RFID_PULSE_MS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "GATE_RFID_PULSE_MS must be a positive integer."
+    exit 1
+fi
 
 PLATE_SERVER_URL="${PLATE_SERVER_URL%/}"
 export PLATE_SERVER_URL CAMERA_INDEX CAMERA_WIDTH CAMERA_HEIGHT CAMERA_FPS \
     CAMERA_FOURCC CAMERA_STATUS_LED_GPIO SERVER_STATUS_LED_GPIO \
     LOOP_STATUS_LED_GPIO BARRIER_OPEN_STATUS_LED_GPIO \
-    PLATE_UNRECOGNIZED_LED_GPIO
+    PLATE_UNRECOGNIZED_LED_GPIO GATE_RFID_OUTPUT_GPIO \
+    GATE_RFID_PULSE_MS
 mkdir -p "$PLATE_OUTPUT_DIR"
 
 server_available=0

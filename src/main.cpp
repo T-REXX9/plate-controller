@@ -23,6 +23,7 @@
 #include "gate_controller.hpp"
 #ifdef PLATE_ENABLE_GPIO
 #include "gate_gpio.hpp"
+#include "rfid_trigger_output.hpp"
 #include "status_leds.hpp"
 #endif
 #include <curl/curl.h>
@@ -1101,6 +1102,8 @@ int runCamera(
     std::unique_ptr<gate::Controller> gateController;
 #ifdef PLATE_ENABLE_GPIO
     std::unique_ptr<gate::RaspberryPiGpio> gateGpio;
+    std::unique_ptr<gate::RfidTriggerOutput> rfidTriggerOutput;
+    std::chrono::milliseconds rfidTriggerDuration{1500};
 #endif
     gate::State previousGateState = gate::State::Startup;
     if (gateMode) {
@@ -1128,12 +1131,37 @@ int runCamera(
         gateConfig.closingTravelTime = gate::Milliseconds(environmentLong(
             "GATE_CLOSING_TRAVEL_MS", gateConfig.closingTravelTime.count()
         ));
+        const auto configuredGateGpio = [](const char* name, long fallback) {
+            const long value = environmentLong(name, fallback);
+            if (value < 0 || value > 27) {
+                throw std::runtime_error(
+                    std::string(name) + " must be a BCM GPIO number from 0 to 27"
+                );
+            }
+            return static_cast<unsigned int>(value);
+        };
         gate::GpioPins pins;
-        pins.loop = static_cast<unsigned int>(environmentLong("GATE_LOOP_GPIO", 17));
-        pins.passage = static_cast<unsigned int>(environmentLong("GATE_PASSAGE_GPIO", 27));
-        pins.traffic = static_cast<unsigned int>(environmentLong("GATE_TRAFFIC_GPIO", 22));
-        pins.open = static_cast<unsigned int>(environmentLong("GATE_OPEN_GPIO", 23));
-        pins.close = static_cast<unsigned int>(environmentLong("GATE_CLOSE_GPIO", 24));
+        pins.loop = configuredGateGpio("GATE_LOOP_GPIO", 17);
+        pins.passage = configuredGateGpio("GATE_PASSAGE_GPIO", 27);
+        pins.traffic = configuredGateGpio("GATE_TRAFFIC_GPIO", 22);
+        pins.open = configuredGateGpio("GATE_OPEN_GPIO", 23);
+        pins.close = configuredGateGpio("GATE_CLOSE_GPIO", 24);
+        const unsigned int rfidGpio = configuredGateGpio(
+            "GATE_RFID_OUTPUT_GPIO", 16
+        );
+        if (rfidGpio == 14 || rfidGpio == 15) {
+            throw std::runtime_error(
+                "GATE_RFID_OUTPUT_GPIO cannot use physical pin 8 or 10 "
+                "(BCM14/BCM15)"
+            );
+        }
+        const long configuredRfidPulse = environmentLong(
+            "GATE_RFID_PULSE_MS", 1500
+        );
+        if (configuredRfidPulse <= 0) {
+            throw std::runtime_error("GATE_RFID_PULSE_MS must be positive");
+        }
+        rfidTriggerDuration = std::chrono::milliseconds(configuredRfidPulse);
         const auto conflictsWithStatusLed = [&statusLedPins](unsigned int pin) {
             return pin == statusLedPins.camera ||
                 pin == statusLedPins.server ||
@@ -1150,11 +1178,24 @@ int runCamera(
                 "A status LED GPIO conflicts with a gate GPIO assignment"
             );
         }
+        if (conflictsWithStatusLed(rfidGpio) ||
+            rfidGpio == pins.loop ||
+            rfidGpio == pins.passage ||
+            rfidGpio == pins.traffic ||
+            rfidGpio == pins.open ||
+            rfidGpio == pins.close) {
+            throw std::runtime_error(
+                "The RFID output GPIO conflicts with another GPIO assignment"
+            );
+        }
         const std::string chipPath = std::getenv("GATE_GPIO_CHIP")
             ? std::getenv("GATE_GPIO_CHIP")
             : "/dev/gpiochip0";
         gateController = std::make_unique<gate::Controller>(gateConfig);
         gateGpio = std::make_unique<gate::RaspberryPiGpio>(chipPath, pins);
+        rfidTriggerOutput = std::make_unique<gate::RfidTriggerOutput>(
+            chipPath, rfidGpio
+        );
         const auto initialInputs = gateGpio->readInputs();
         const auto initialStatus = gateController->update(
             std::chrono::steady_clock::now(), initialInputs
@@ -1169,6 +1210,9 @@ int runCamera(
                   << " traffic=" << pins.traffic
                   << " open=" << pins.open
                   << " close=" << pins.close << ".\n";
+        std::cout << "RFID trigger ready: BCM" << rfidGpio
+                  << ", idle HIGH; capture pulse LOW for "
+                  << rfidTriggerDuration.count() << " ms.\n";
         } catch (const std::exception& error) {
             std::cerr << "Unable to start gate GPIO: " << error.what() << '\n';
             camera.release();
@@ -1196,6 +1240,7 @@ int runCamera(
     std::string command;
     while (true) {
         command.clear();
+        bool loopTriggeredCapture = false;
         long activeCommandId = 0;
         if (gateMode) {
 #ifdef PLATE_ENABLE_GPIO
@@ -1237,6 +1282,7 @@ int runCamera(
                         previousGateState = status.state;
                     }
                     if (status.state == gate::State::Recognizing) {
+                        loopTriggeredCapture = true;
                         command = "capture";
                     } else {
                         std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -1343,6 +1389,21 @@ int runCamera(
         statusLeds->setPlateUnrecognized(false);
 #endif
         const auto startedAt = std::chrono::steady_clock::now();
+#ifdef PLATE_ENABLE_GPIO
+        if (loopTriggeredCapture) {
+            try {
+                rfidTriggerOutput->pulse(rfidTriggerDuration);
+                std::cout << "RFID TRIGGER: LOW for "
+                          << rfidTriggerDuration.count()
+                          << " ms; camera capture starting.\n";
+            } catch (const std::exception& error) {
+                gateGpio->safeOutputs();
+                std::cerr << "RFID TRIGGER FAILURE: " << error.what() << '\n';
+                camera.release();
+                return 1;
+            }
+        }
+#endif
         const auto millisecondsBetween = [](const auto& beginning, const auto& end) {
             return std::chrono::duration_cast<std::chrono::milliseconds>(end - beginning).count();
         };
