@@ -139,6 +139,10 @@ set +a
 : "${GATE_MODE:=0}"
 : "${GATE_LOOP_GPIO:=17}"
 : "${GATE_PASSAGE_GPIO:=27}"
+: "${RFID_ENABLED:=0}"
+: "${RFID_SERIAL_DEVICE:=/dev/serial0}"
+: "${RFID_BAUD_RATE:=9600}"
+: "${GATE_RFID_OUTPUT_GPIO:=16}"
 
 echo
 if systemctl is-active --quiet "$service_name"; then
@@ -159,7 +163,7 @@ else
     warn "Controller service was already stopped."
 fi
 
-module_header 1 "USB CAMERA SUBSYSTEM"
+module_header 1 "CAMERA AND RFID SUBSYSTEMS"
 camera_device="/dev/video$CAMERA_INDEX"
 if [[ -e "$camera_device" ]]; then
     printf '[ SCAN ] Probing %-29s [ OK ]\n' "$camera_device"
@@ -199,6 +203,27 @@ else
     fail "Configured camera is missing: $camera_device"
     connected_devices="$(find /dev -maxdepth 1 -name 'video*' -printf '%f ' 2>/dev/null || true)"
     detail "└─ Connected devices: ${connected_devices:-none}"
+fi
+
+echo
+if [[ "$RFID_ENABLED" != "1" ]]; then
+    echo "[ SCAN ] Checking optional RFID reader..............[DISABLED]"
+    pass "RFID mode is disabled; physical pin 36 remains inactive."
+elif [[ ! -e "$RFID_SERIAL_DEVICE" ]]; then
+    printf '[ SCAN ] Probing %-29s[MISSING]\n' "$RFID_SERIAL_DEVICE"
+    fail "Configured RFID UART is missing: $RFID_SERIAL_DEVICE"
+    hint "Enable the Raspberry Pi UART, reboot, and check pins 8/10."
+else
+    resolved_rfid_device="$(readlink -f "$RFID_SERIAL_DEVICE" 2>/dev/null || true)"
+    printf '[ SCAN ] Probing %-29s [ OK ]\n' "$RFID_SERIAL_DEVICE"
+    pass "Configured RFID UART exists and is ready for the controller."
+    detail "├─ Device : $RFID_SERIAL_DEVICE${resolved_rfid_device:+ -> $resolved_rfid_device}"
+    detail "├─ Format : ${RFID_BAUD_RATE} baud, 8 data bits, no parity, 1 stop bit"
+    detail "└─ Trigger: physical pin 36 / BCM $GATE_RFID_OUTPUT_GPIO (active LOW)"
+    if [[ ! -r "$RFID_SERIAL_DEVICE" || ! -w "$RFID_SERIAL_DEVICE" ]]; then
+        fail "The diagnostic user cannot read and write the RFID UART."
+        hint "Run controller -update so the service user receives dialout access."
+    fi
 fi
 
 module_header 2 "PC SERVER LINK"

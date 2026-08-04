@@ -230,12 +230,13 @@ PLATE_SKIP_APT=1 bash "$project_dir/build_raspberry_pi.sh"
 
 getent group gpio >/dev/null || groupadd --system gpio
 getent group video >/dev/null || groupadd --system video
+getent group dialout >/dev/null || groupadd --system dialout
 getent group "$service_user" >/dev/null || groupadd --system "$service_user"
 if ! id "$service_user" >/dev/null 2>&1; then
     useradd --system --gid "$service_user" --no-create-home \
         --shell /usr/sbin/nologin "$service_user"
 fi
-usermod -g "$service_user" -a -G gpio,video "$service_user"
+usermod -g "$service_user" -a -G gpio,video,dialout "$service_user"
 install -d -o "$service_user" -g "$service_user" -m 750 "$data_dir/Output/Plate-Crops"
 install -d -o root -g "$service_user" -m 750 "$config_dir"
 
@@ -259,7 +260,7 @@ After=network-online.target
 Type=simple
 User=$service_user
 Group=$service_user
-SupplementaryGroups=gpio video
+SupplementaryGroups=gpio video dialout
 WorkingDirectory=$project_dir
 Environment=PLATE_READER_CONFIG=$config_path
 Environment=PLATE_OUTPUT_DIR=$data_dir/Output

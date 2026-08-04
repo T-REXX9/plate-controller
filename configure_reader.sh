@@ -70,6 +70,14 @@ barrier_open_status_led_gpio=12
 plate_unrecognized_led_gpio=13
 rfid_output_gpio=16
 rfid_pulse_ms=1500
+rfid_enabled=0
+rfid_serial_device=/dev/serial0
+rfid_baud_rate=9600
+rfid_read_timeout_ms=2000
+rfid_min_length=4
+rfid_max_length=64
+rfid_tag_bytes=12
+uart_reboot_required=0
 echo
 echo "Using the EMEET C950 4K profile: 3840x2160, MJPEG, 30 FPS, autofocus."
 if [[ "$(uname -s)" == "Linux" ]] && command -v v4l2-ctl >/dev/null 2>&1; then
@@ -80,10 +88,66 @@ if [[ "$(uname -s)" == "Linux" ]] && command -v v4l2-ctl >/dev/null 2>&1; then
     fi
 fi
 
+echo
+read -r -p "Is a long-range RFID reader installed? [y/N]: " rfid_answer
+case "${rfid_answer:-n}" in
+    y|Y|yes|YES)
+        rfid_enabled=1
+        while true; do
+            read -r -p "RFID reader baud rate [9600]: " rfid_baud_rate_answer
+            rfid_baud_rate="${rfid_baud_rate_answer:-9600}"
+            case "$rfid_baud_rate" in
+                1200|2400|4800|9600|19200|38400|57600|115200) break ;;
+                *)
+                    echo "Choose 1200, 2400, 4800, 9600, 19200, 38400, 57600, or 115200."
+                    ;;
+            esac
+        done
+        echo "RFID will use physical pins 8/10 via $rfid_serial_device at ${rfid_baud_rate} baud."
+        echo "Trigger output will use physical pin 36 / BCM16."
+        if [[ "$(uname -s)" == "Linux" ]]; then
+            boot_config=""
+            boot_cmdline=""
+            if [[ -f /boot/firmware/config.txt ]]; then
+                boot_config=/boot/firmware/config.txt
+                boot_cmdline=/boot/firmware/cmdline.txt
+            elif [[ -f /boot/config.txt ]]; then
+                boot_config=/boot/config.txt
+                boot_cmdline=/boot/cmdline.txt
+            fi
+            if [[ -n "$boot_config" && $EUID -eq 0 ]]; then
+                if grep -q '^enable_uart=' "$boot_config"; then
+                    if ! grep -q '^enable_uart=1$' "$boot_config"; then
+                        sed -i 's/^enable_uart=.*/enable_uart=1/' "$boot_config"
+                        uart_reboot_required=1
+                    fi
+                else
+                    printf '\nenable_uart=1\n' >>"$boot_config"
+                    uart_reboot_required=1
+                fi
+                if [[ -f "$boot_cmdline" ]] &&
+                   grep -qE '(^| )(console=serial0|console=ttyAMA[0-9]*|console=ttyS[0-9]*)' "$boot_cmdline"; then
+                    sed -i -E \
+                        's/(^| )(console=(serial0|ttyAMA[0-9]*|ttyS[0-9]*)[^ ]*)//g; s/^ +//; s/ +$//; s/  +/ /g' \
+                        "$boot_cmdline"
+                    uart_reboot_required=1
+                fi
+            elif [[ -n "$boot_config" ]]; then
+                echo "Warning: run controller -configure with sudo to enable the UART automatically."
+            fi
+        fi
+        ;;
+    *)
+        echo "RFID disabled. Physical pin 36 will not be activated."
+        ;;
+esac
+
 read -r -p "Enable automatic GPIO gate mode? [y/N]: " gate_answer
 case "${gate_answer:-n}" in
     y|Y|yes|YES)
-        read -r -p "Are the two switches and all four protected 3.3 V output interfaces wired? [y/N]: " wiring_answer
+        output_count=three
+        [[ "$rfid_enabled" == "1" ]] && output_count=four
+        read -r -p "Are the two switches and all $output_count protected 3.3 V output interfaces wired? [y/N]: " wiring_answer
         case "${wiring_answer:-n}" in
             y|Y|yes|YES) gate_mode=1 ;;
             *)
@@ -97,14 +161,20 @@ esac
 
 mkdir -p "$(dirname "$config_path")"
 umask 077
-printf 'PLATE_SERVER_URL=%s\nCAMERA_INDEX=%s\nCAMERA_WIDTH=%s\nCAMERA_HEIGHT=%s\nCAMERA_FPS=%s\nCAMERA_FOURCC=%s\nCAMERA_STATUS_LED_GPIO=%s\nSERVER_STATUS_LED_GPIO=%s\nLOOP_STATUS_LED_GPIO=%s\nBARRIER_OPEN_STATUS_LED_GPIO=%s\nPLATE_UNRECOGNIZED_LED_GPIO=%s\nGATE_RFID_OUTPUT_GPIO=%s\nGATE_RFID_PULSE_MS=%s\nGATE_MODE=%s\n' \
+printf 'PLATE_SERVER_URL=%s\nCAMERA_INDEX=%s\nCAMERA_WIDTH=%s\nCAMERA_HEIGHT=%s\nCAMERA_FPS=%s\nCAMERA_FOURCC=%s\nCAMERA_STATUS_LED_GPIO=%s\nSERVER_STATUS_LED_GPIO=%s\nLOOP_STATUS_LED_GPIO=%s\nBARRIER_OPEN_STATUS_LED_GPIO=%s\nPLATE_UNRECOGNIZED_LED_GPIO=%s\nRFID_ENABLED=%s\nRFID_SERIAL_DEVICE=%s\nRFID_BAUD_RATE=%s\nRFID_READ_TIMEOUT_MS=%s\nRFID_MIN_LENGTH=%s\nRFID_MAX_LENGTH=%s\nRFID_TAG_BYTES=%s\nGATE_RFID_OUTPUT_GPIO=%s\nGATE_RFID_PULSE_MS=%s\nGATE_MODE=%s\n' \
     "$server_url" "$camera_index" "$camera_width" "$camera_height" \
     "$camera_fps" "$camera_fourcc" "$camera_status_led_gpio" \
     "$server_status_led_gpio" "$loop_status_led_gpio" \
     "$barrier_open_status_led_gpio" "$plate_unrecognized_led_gpio" \
+    "$rfid_enabled" "$rfid_serial_device" "$rfid_baud_rate" \
+    "$rfid_read_timeout_ms" "$rfid_min_length" "$rfid_max_length" "$rfid_tag_bytes" \
     "$rfid_output_gpio" "$rfid_pulse_ms" \
     "$gate_mode" > "$config_path"
 chmod 600 "$config_path"
+
+if [[ "$uart_reboot_required" == "1" ]]; then
+    echo "UART configuration was updated. Reboot the Raspberry Pi before testing RFID."
+fi
 
 if curl --fail --silent --show-error --connect-timeout 3 --max-time 5 \
     "$server_url/health" >/dev/null; then

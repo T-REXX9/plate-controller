@@ -55,10 +55,18 @@ Five active-high status indicators are available:
 - Boom barrier open: BCM12, physical pin 32.
 - Plate not recognized: BCM13, physical pin 33.
 
-The RFID system trigger uses BCM16 (physical pin 36). It remains HIGH normally,
+The optional RFID system trigger uses BCM16 (physical pin 36). It remains HIGH normally,
 switches LOW when a debounced loop detection starts camera capture, and returns
-HIGH after 1.5 seconds without delaying YOLO or OCR. Physical pins 8 and 10 are
-explicitly rejected for this output.
+HIGH after 1.5 seconds without delaying YOLO or OCR. The tag number is read from
+`/dev/serial0` on physical pins 8/10 and printed in the live controller log.
+These are 3.3 V UART pins, so a true RS-232 reader requires an RS-232-to-3.3 V
+TTL transceiver. When RFID is enabled, an active sticker found in the server's
+RFID table authorizes the barrier even when plate OCR is unreadable. When RFID
+is disabled, BCM16 is not claimed and the existing plate-only authorization
+remains active. The 12-byte binary value is logged and uploaded as uppercase
+hexadecimal without separators. During
+`controller -configure`, select the baud rate stated in the RFID reader manual;
+the value is saved in the controller configuration rather than assumed.
 
 Each LED requires its own 220–330 Ω series resistor. Complete wiring and
 indicator behavior are documented in
@@ -76,7 +84,7 @@ curl -fsSL https://raw.githubusercontent.com/T-REXX9/plate-controller/main/insta
 The guided installer asks whether the separate PC server is already installed.
 When it is available, the installer scans the Pi's local `/24` network for the
 plate-program identity and health endpoint, asks for the camera, builds
-and tests everything, installs GPIO permissions, and starts the reader as a
+and tests everything, installs GPIO, video, and UART permissions, and starts the reader as a
 background system service. It supports both Raspberry Pi OS Bookworm and Trixie;
 if the operating system's OpenCV is too old, it builds the required minimal
 OpenCV 4.10 installation automatically. Long compiler output is kept out of the

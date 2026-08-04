@@ -42,6 +42,7 @@ if(PLATE_ENABLE_GPIO)
             src/status_leds.cpp
             src/gate_gpio.cpp
             src/rfid_trigger_output.cpp
+            src/serial_rfid_reader.cpp
     )
     target_compile_definitions(plate_reader PRIVATE PLATE_ENABLE_GPIO=1)
     if(GPIOD_VERSION VERSION_LESS "2.0")
@@ -80,6 +81,15 @@ if(BUILD_TESTING)
     add_executable(gate_controller_tests tests/gate_controller_tests.cpp)
     target_link_libraries(gate_controller_tests PRIVATE gate_control)
     add_test(NAME gate_controller_safety COMMAND gate_controller_tests)
+    add_executable(
+        serial_rfid_reader_tests
+        tests/serial_rfid_reader_tests.cpp
+        src/serial_rfid_reader.cpp
+    )
+    target_include_directories(
+        serial_rfid_reader_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    add_test(NAME serial_rfid_reader_parser COMMAND serial_rfid_reader_tests)
 endif()
 
 if(PLATE_RASPBERRY_PI AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

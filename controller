@@ -18,9 +18,9 @@ Plate controller management
   controller -status      Show whether the controller is running
   controller -logs        Follow live detection and gate logs
   controller -update      Safely pull, build, test, and restart
-  controller -configure   Find/configure the PC server and camera
+  controller -configure   Configure the server, camera, RFID, and gate mode
   controller -check       Check the configured PC server connection
-  controller -diagnose    Check the camera, server, and gate sensors
+  controller -diagnose    Check the camera, RFID, server, and gate sensors
   controller -start       Start the controller
   controller -stop        Stop the controller
   controller -restart     Restart the controller

@@ -97,7 +97,7 @@ Use BCM numbers in software. Physical pin numbers refer to the Raspberry Pi
 | Traffic red/green selector | 22 | 15 | LOW red, HIGH green |
 | Barrier open command | 23 | 16 | Idle HIGH; LOW for one second |
 | Barrier close command | 24 | 18 | Idle HIGH; LOW for one second |
-| RFID capture trigger | 16 | 36 | Idle HIGH; LOW for 1.5 seconds at capture start |
+| RFID capture trigger | 16 | 36 | Used only when RFID is enabled; idle HIGH; LOW for 1.5 seconds at capture start |
 | Camera detected LED | 25 | 22 | LOW off; HIGH detected |
 | Server detected LED | 5 | 29 | LOW off; HIGH reachable |
 | Loop detector active LED | 6 | 31 | LOW off; HIGH vehicle present |
@@ -106,6 +106,35 @@ Use BCM numbers in software. Physical pin numbers refer to the Raspberry Pi
 | Switch return/common | — | 6 | Raspberry Pi GND |
 
 Other Raspberry Pi ground pins may also be used.
+
+## Long-range RFID reader UART
+
+The controller reads the RFID number from the Raspberry Pi primary UART at
+`/dev/serial0`. Pins 8 and 10 are **3.3 V UART pins, not RS-232 voltage pins**.
+If the reader exposes true RS-232 signals, install an RS-232-to-3.3 V TTL
+transceiver (for example, a MAX3232 module) between it and the Raspberry Pi.
+Never connect an RS-232 signal directly to the GPIO header.
+
+```text
+RFID reader RS-232 TX ──► RS-232/3.3 V transceiver ──► Pi pin 10 / GPIO15 RX
+RFID reader RS-232 RX ◄── RS-232/3.3 V transceiver ◄── Pi pin  8 / GPIO14 TX
+Transceiver TTL GND  ───────────────────────────────── Pi pin  6 / GND
+
+Pi pin 36 / GPIO16 ──► protected active-LOW RFID trigger input
+                       (external 10 kΩ pull-up to 3.3 V recommended)
+```
+
+The TX connection is optional only when the specific reader continuously sends
+ASCII tag numbers without receiving commands. Configuration asks for the
+reader's baud rate and uses 8 data bits, no parity, and 1 stop bit. Select the
+baud rate stated in the reader manual. The current reader profile expects a
+12-byte binary tag and displays/stores it as uppercase hexadecimal without
+separators. For example, bytes `0x30 0x45 ... 0x3F 0x90` become
+`3045673030553F9030553F90`.
+
+When `controller -configure` is answered with no RFID reader, GPIO16 is not
+claimed or pulsed. With RFID enabled, a loop event pulses GPIO16 LOW for 1.5
+seconds while the UART waits for the tag number.
 
 ## Toggle-switch connections
 
@@ -136,9 +165,10 @@ to 3.3 V at their protected interfaces. This holds OPEN, CLOSE, and the RFID
 trigger inactive before the controller program claims the GPIO lines. Do not
 use physical header pins 8 or 10 for the RFID output.
 
-At program startup and shutdown, BCM22 is driven LOW while BCM23, BCM24, and
-BCM16 are driven HIGH. This selects red and prevents accidental barrier or RFID
-trigger commands.
+At program startup and shutdown, BCM22 is driven LOW while BCM23 and BCM24 are
+driven HIGH. This selects red and prevents accidental barrier movement. BCM16
+is driven HIGH only when RFID is enabled; otherwise the program leaves it
+unclaimed and the external pull-up keeps the RFID trigger inactive.
 
 ## Enable automatic gate mode
 

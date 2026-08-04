@@ -27,17 +27,22 @@ stop LOW.
 
 1. The controller starts red with both movement outputs HIGH and inactive.
 2. The grounded inductive-loop input must remain LOW for the debounce interval.
-3. One cycle is locked, the RFID trigger switches LOW asynchronously for 1.5
-   seconds, and camera capture starts at the same time.
+3. One cycle is locked. When optional RFID mode is enabled, the RFID trigger
+   switches LOW asynchronously for 1.5 seconds, the UART listens on physical
+   pins 8/10, and camera capture starts at the same time. When RFID is disabled,
+   physical pin 36 is not activated.
 4. The reader tries one fresh 4K frame, with one
    additional frame captured only when detection or OCR is uncertain.
 5. YOLO detects the strongest plate crop in each frame.
 6. Each plate row is converted to grayscale and PP-OCRv5 produces a consensus.
-7. The plate and crop are sent to the PC website for MySQL authorization.
-8. Unreadable, unregistered, expired, inactive, or failed server results remain
-   red and produce no movement pulse. The loop must clear before retrying.
-9. An authorized result switches the traffic output HIGH and pulses OPEN LOW
-   for exactly one second.
+7. The plate, crop when available, and canonical RFID value are sent to the PC
+   website for MySQL authorization.
+8. With RFID disabled, plate authorization continues to work by itself. With
+   RFID enabled, an active sticker present in the RFID table authorizes the
+   barrier independently of plate OCR. A missing, unregistered, expired,
+   inactive, or failed RFID result remains red and produces no movement pulse.
+9. Only an authorized result switches the traffic output HIGH and pulses OPEN
+   LOW for exactly one second. The loop must clear before a denied cycle retries.
 10. After the configured opening travel delay, the controller waits for the IR
    input to be grounded LOW, indicating that the vehicle is beneath the barrier.
 11. When the IR input returns HIGH, it must remain clear for the configured
