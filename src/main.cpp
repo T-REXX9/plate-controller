@@ -600,6 +600,8 @@ bool sendRecognition(
     const std::string& plate,
     float detectorConfidence,
     const fs::path& cropPath,
+    const cv::Mat& rawFrame,
+    const cv::Mat& annotatedFrame,
     long commandId,
     const std::string& rfidTag,
     bool rfidRequired,
@@ -622,6 +624,21 @@ bool sendRecognition(
     endpoint += "/api/reader/recognitions";
     const std::string confidence = std::to_string(detectorConfidence);
     curl_mime* form = curl_mime_init(client);
+
+    std::vector<unsigned char> rawFrameJpeg;
+    std::vector<unsigned char> annotatedFrameJpeg;
+    const std::vector<int> frameEncoding{cv::IMWRITE_JPEG_QUALITY, 88};
+    if ((!rawFrame.empty() && !cv::imencode(
+            ".jpg", rawFrame, rawFrameJpeg, frameEncoding
+        )) ||
+        (!annotatedFrame.empty() && !cv::imencode(
+            ".jpg", annotatedFrame, annotatedFrameJpeg, frameEncoding
+        ))) {
+        curl_mime_free(form);
+        curl_easy_cleanup(client);
+        responseBody = "unable to encode dashboard camera frames";
+        return false;
+    }
 
     curl_mimepart* part = curl_mime_addpart(form);
     curl_mime_name(part, "plate");
@@ -647,6 +664,24 @@ bool sendRecognition(
         curl_mime_type(part, "image/jpeg");
         curl_mime_filedata(part, cropPath.string().c_str());
     }
+    const auto addFrame = [&form](
+        const char* fieldName,
+        const char* filename,
+        const std::vector<unsigned char>& bytes
+    ) {
+        if (bytes.empty()) return;
+        curl_mimepart* framePart = curl_mime_addpart(form);
+        curl_mime_name(framePart, fieldName);
+        curl_mime_filename(framePart, filename);
+        curl_mime_type(framePart, "image/jpeg");
+        curl_mime_data(
+            framePart,
+            reinterpret_cast<const char*>(bytes.data()),
+            bytes.size()
+        );
+    };
+    addFrame("raw_frame", "raw-frame.jpg", rawFrameJpeg);
+    addFrame("annotated_frame", "annotated-frame.jpg", annotatedFrameJpeg);
 
     curl_easy_setopt(client, CURLOPT_URL, endpoint.c_str());
     curl_easy_setopt(client, CURLOPT_MIMEPOST, form);
@@ -1710,6 +1745,8 @@ int runCamera(
                     "UNREADABLE",
                     0.0F,
                     {},
+                    {},
+                    {},
                     activeCommandId,
                     rfidTag,
                     true,
@@ -1821,6 +1858,8 @@ int runCamera(
                 plate,
                 winner.detection.confidence,
                 cropPath,
+                frames[winner.frameIndex],
+                annotatedFrame,
                 activeCommandId,
                 rfidTag,
                 rfidRequired,

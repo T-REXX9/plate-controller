@@ -14,7 +14,9 @@ the separate PC web server and does not host a website or database.
 5. When uncertain, acquire one more frame and use two-sample OCR consensus.
 6. Return the final clean alphanumeric value without imposing a plate format.
 7. Store only the winning enhanced crop in `Output/Plate-Crops`.
-8. Send the plate, detector confidence, and crop to the PC server.
+8. Send the plate, detector confidence, crop, raw frame, and annotated frame to
+   the PC server. Raw and annotated frames are encoded in memory and are not
+   retained on the Raspberry Pi.
 
 ## Boom-barrier control development
 
