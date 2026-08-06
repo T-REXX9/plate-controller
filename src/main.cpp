@@ -1738,43 +1738,85 @@ int runCamera(
             bool rfidAuthorized = false;
             long long noPlateServerMilliseconds = 0;
             std::string noPlateServerResponse;
-            if (rfidRequired && !rfidTag.empty()) {
-                const auto serverStartedAt = std::chrono::steady_clock::now();
-                const bool sent = sendRecognition(
-                    serverUrl,
-                    "UNREADABLE",
-                    0.0F,
-                    {},
-                    {},
-                    {},
-                    activeCommandId,
-                    rfidTag,
-                    true,
-                    noPlateServerResponse
-                );
-                noPlateServerMilliseconds = millisecondsBetween(
-                    serverStartedAt,
-                    std::chrono::steady_clock::now()
-                );
-                bool serverAuthorized = false;
-                bool serverRfidAuthorized = false;
-                rfidAuthorized = sent &&
-                    parseJsonBool(
-                        noPlateServerResponse,
-                        "authorized",
-                        serverAuthorized
-                    ) && serverAuthorized &&
-                    parseJsonBool(
-                        noPlateServerResponse,
-                        "rfid_authorized",
-                        serverRfidAuthorized
-                    ) && serverRfidAuthorized;
+            cv::Mat noPlateAnnotatedFrame = frames.back().clone();
+            const std::string noPlateLabel = "NO PLATE DETECTED";
+            const double labelScale = std::max(
+                1.0,
+                static_cast<double>(noPlateAnnotatedFrame.cols) / 1600.0
+            );
+            const int labelThickness = std::max(2, cvRound(labelScale * 3.0));
+            int labelBaseline = 0;
+            const cv::Size labelSize = cv::getTextSize(
+                noPlateLabel,
+                cv::FONT_HERSHEY_SIMPLEX,
+                labelScale,
+                labelThickness,
+                &labelBaseline
+            );
+            const int labelPadding = std::max(12, cvRound(labelScale * 12.0));
+            const cv::Point labelOrigin(
+                labelPadding * 2,
+                labelPadding * 2 + labelSize.height
+            );
+            cv::rectangle(
+                noPlateAnnotatedFrame,
+                cv::Rect(
+                    labelOrigin.x - labelPadding,
+                    labelOrigin.y - labelSize.height - labelPadding,
+                    labelSize.width + labelPadding * 2,
+                    labelSize.height + labelBaseline + labelPadding * 2
+                ),
+                cv::Scalar(0, 0, 180),
+                cv::FILLED
+            );
+            cv::putText(
+                noPlateAnnotatedFrame,
+                noPlateLabel,
+                labelOrigin,
+                cv::FONT_HERSHEY_SIMPLEX,
+                labelScale,
+                cv::Scalar(255, 255, 255),
+                labelThickness,
+                cv::LINE_AA
+            );
+
+            const auto serverStartedAt = std::chrono::steady_clock::now();
+            const bool sent = sendRecognition(
+                serverUrl,
+                "UNREADABLE",
+                0.0F,
+                {},
+                frames.back(),
+                noPlateAnnotatedFrame,
+                activeCommandId,
+                rfidTag,
+                rfidRequired,
+                noPlateServerResponse
+            );
+            noPlateServerMilliseconds = millisecondsBetween(
+                serverStartedAt,
+                std::chrono::steady_clock::now()
+            );
+            bool serverAuthorized = false;
+            bool serverRfidAuthorized = false;
+            rfidAuthorized = sent && rfidRequired && !rfidTag.empty() &&
+                parseJsonBool(
+                    noPlateServerResponse,
+                    "authorized",
+                    serverAuthorized
+                ) && serverAuthorized &&
+                parseJsonBool(
+                    noPlateServerResponse,
+                    "rfid_authorized",
+                    serverRfidAuthorized
+                ) && serverRfidAuthorized;
 #ifdef PLATE_ENABLE_GPIO
-                statusLeds->setServer(sent);
+            statusLeds->setServer(sent);
 #endif
-                std::cout << (sent ? "SERVER ACCEPTED RFID " : "SERVER SEND FAILED RFID ")
-                          << rfidTag << ' ' << noPlateServerResponse << '\n';
-            }
+            std::cout << (sent
+                    ? "SERVER ACCEPTED NO-PLATE FRAME "
+                    : "SERVER SEND FAILED NO-PLATE FRAME ")
+                      << noPlateServerResponse << '\n';
             const auto elapsed = millisecondsBetween(
                 startedAt,
                 std::chrono::steady_clock::now()
