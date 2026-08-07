@@ -51,6 +51,9 @@ Snapshot Controller::update(TimePoint now, const Inputs& inputs) {
         started_ = true;
         stateEnteredAt_ = now;
     }
+    if (trafficOverride_ && now >= trafficOverrideEndsAt_) {
+        trafficOverride_.reset();
+    }
 
     switch (state_) {
         case State::Startup:
@@ -177,12 +180,39 @@ bool Controller::acknowledgeFault(TimePoint now, const Inputs& inputs) {
     return true;
 }
 
+bool Controller::manualOpen(TimePoint now, const Inputs&) {
+    faultReason_.clear();
+    trafficOverride_.reset();
+    transition(State::Opening, now);
+    return true;
+}
+
+bool Controller::manualClose(TimePoint now, const Inputs& inputs) {
+    if (inputs.passageBlocked) return false;
+    faultReason_.clear();
+    trafficOverride_.reset();
+    transition(State::Closing, now);
+    return true;
+}
+
+void Controller::testTrafficSignal(
+    TimePoint now,
+    bool green,
+    Milliseconds duration
+) {
+    trafficOverride_ = green;
+    trafficOverrideEndsAt_ = now + duration;
+}
+
 Snapshot Controller::snapshot(TimePoint now, const Inputs& inputs) const {
     Outputs outputs;
     const bool authorizedMovement = state_ == State::Opening ||
         state_ == State::GateOpen || state_ == State::VehiclePassing ||
         state_ == State::ClearanceWait;
     outputs.trafficGreen = authorizedMovement;
+    if (trafficOverride_ && now < trafficOverrideEndsAt_) {
+        outputs.trafficGreen = *trafficOverride_;
+    }
     outputs.requestOpen = state_ == State::Opening && now < relayPulseEndsAt_;
     outputs.requestClose = state_ == State::Closing && now < relayPulseEndsAt_ &&
         !inputs.passageBlocked;

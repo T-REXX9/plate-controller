@@ -16,6 +16,18 @@ struct RfidReadResult {
     std::string error;
 };
 
+struct SerialDebugSettings {
+    int baudRate = 9600;
+    int dataBits = 8;
+    char parity = 'N';
+    int stopBits = 1;
+};
+
+struct SerialDebugResult {
+    std::string received;
+    std::string error;
+};
+
 std::string extractRfidTag(
     const std::string& bytes,
     std::size_t minimumLength = 4,
@@ -24,6 +36,12 @@ std::string extractRfidTag(
 
 std::string encodeRfidBytes(const std::string& bytes);
 std::string extractUhfReader18Epc(const std::string& bytes);
+SerialDebugResult transactSerial(
+    const std::string& device,
+    const SerialDebugSettings& settings,
+    const std::string& transmitted,
+    std::chrono::milliseconds timeout
+);
 
 class SerialRfidReader {
 public:

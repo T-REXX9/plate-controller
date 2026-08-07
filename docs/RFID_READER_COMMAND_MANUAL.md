@@ -75,6 +75,14 @@ Confirmed successful response:
 
 The `14` data byte is hexadecimal 20. The reader uses units of 100 ms, so the configured duration is 2 seconds.
 
+To set the duration to five seconds instead, send:
+
+```text
+05 00 25 32 6C 22
+```
+
+The `32` data byte is hexadecimal 50, or 50 × 100 ms.
+
 ### 4. Read the current work-mode configuration
 
 Send:
@@ -215,6 +223,8 @@ This short form of command `35` returned `FD` because this reader requires all s
 | Get reader information | `04 00 21 D9 6A` |
 | Set baud rate to 9600 | `05 FF 28 00 76 46` |
 | Set scan duration to 2 seconds | `05 00 25 14 58 66` |
+| Set scan duration to 5 seconds | `05 00 25 32 6C 22` |
 | Get work-mode configuration | `04 00 36 E7 0E` |
 | Set Answer Mode | `0A 00 35 00 02 04 02 06 00 CD 09` |
 | Perform one single-tag inventory | `04 00 0F A5 A2` |
+| Perform multi-tag inventory | `04 00 01 DB 4B` |

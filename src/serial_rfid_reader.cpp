@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <optional>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -22,6 +23,8 @@
 
 namespace gate {
 namespace {
+
+std::mutex serialPortMutex;
 
 speed_t baudConstant(int baudRate) {
     switch (baudRate) {
@@ -59,22 +62,69 @@ std::string systemError(const std::string& operation) {
     return operation + ": " + std::strerror(errno);
 }
 
-std::string configureDescriptor(int descriptor, int baudRate) {
+std::string configureDescriptor(
+    int descriptor,
+    const SerialDebugSettings& serial
+) {
     termios settings{};
     if (tcgetattr(descriptor, &settings) < 0) {
         return systemError("Unable to read RFID serial settings");
     }
     cfmakeraw(&settings);
     settings.c_cflag |= CLOCAL | CREAD;
-    settings.c_cflag &= ~CSTOPB;
-    settings.c_cflag &= ~PARENB;
+    if (serial.stopBits == 2) settings.c_cflag |= CSTOPB;
+    else settings.c_cflag &= ~CSTOPB;
+    settings.c_cflag &= ~(PARENB | PARODD);
+    if (serial.parity == 'E') settings.c_cflag |= PARENB;
+    else if (serial.parity == 'O') settings.c_cflag |= PARENB | PARODD;
     settings.c_cflag &= ~CSIZE;
-    settings.c_cflag |= CS8;
-    const speed_t speed = baudConstant(baudRate);
+    switch (serial.dataBits) {
+        case 5: settings.c_cflag |= CS5; break;
+        case 6: settings.c_cflag |= CS6; break;
+        case 7: settings.c_cflag |= CS7; break;
+        case 8: settings.c_cflag |= CS8; break;
+        default: return "RFID serial data bits must be 5, 6, 7, or 8";
+    }
+    if (serial.stopBits != 1 && serial.stopBits != 2) {
+        return "RFID serial stop bits must be 1 or 2";
+    }
+    if (serial.parity != 'N' && serial.parity != 'E' && serial.parity != 'O') {
+        return "RFID serial parity must be N, E, or O";
+    }
+    const speed_t speed = baudConstant(serial.baudRate);
     if (cfsetispeed(&settings, speed) < 0 ||
         cfsetospeed(&settings, speed) < 0 ||
         tcsetattr(descriptor, TCSANOW, &settings) < 0) {
         return systemError("Unable to configure RFID serial port");
+    }
+    return {};
+}
+
+std::string configureDescriptor(int descriptor, int baudRate) {
+    return configureDescriptor(
+        descriptor, SerialDebugSettings{baudRate, 8, 'N', 1}
+    );
+}
+
+std::string writeBytes(int descriptor, std::string_view bytes) {
+    std::size_t offset = 0;
+    while (offset < bytes.size()) {
+        const ssize_t count = write(
+            descriptor, bytes.data() + offset, bytes.size() - offset
+        );
+        if (count > 0) {
+            offset += static_cast<std::size_t>(count);
+            continue;
+        }
+        if (count < 0 &&
+            (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            pollfd state{descriptor, POLLOUT, 0};
+            if (poll(&state, 1, 500) > 0) continue;
+        }
+        return systemError("Unable to send RFID command");
+    }
+    if (tcdrain(descriptor) < 0) {
+        return systemError("Unable to finish sending RFID command");
     }
     return {};
 }
@@ -152,26 +202,12 @@ std::string writeCommand(
     int descriptor,
     const std::array<unsigned char, Size>& command
 ) {
-    std::size_t offset = 0;
-    while (offset < command.size()) {
-        const ssize_t count = write(
-            descriptor, command.data() + offset, command.size() - offset
-        );
-        if (count > 0) {
-            offset += static_cast<std::size_t>(count);
-            continue;
-        }
-        if (count < 0 &&
-            (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
-            pollfd state{descriptor, POLLOUT, 0};
-            if (poll(&state, 1, 500) > 0) continue;
-        }
-        return systemError("Unable to send RFID command");
-    }
-    if (tcdrain(descriptor) < 0) {
-        return systemError("Unable to finish sending RFID command");
-    }
-    return {};
+    return writeBytes(
+        descriptor,
+        std::string_view(
+            reinterpret_cast<const char*>(command.data()), command.size()
+        )
+    );
 }
 
 std::optional<std::string> readValidFrame(
@@ -238,6 +274,72 @@ std::string extractUhfReader18Epc(const std::string& bytes) {
     return {};
 }
 
+SerialDebugResult transactSerial(
+    const std::string& device,
+    const SerialDebugSettings& settings,
+    const std::string& transmitted,
+    std::chrono::milliseconds timeout
+) {
+    if (device.empty() || device.front() != '/') {
+        return {{}, "RFID serial device must be an absolute path"};
+    }
+    if (transmitted.empty() || transmitted.size() > 512U) {
+        return {{}, "RFID debug transmission must contain 1 to 512 bytes"};
+    }
+    if (timeout.count() < 50 || timeout > std::chrono::seconds(10)) {
+        return {{}, "RFID debug timeout must be from 50 to 10000 ms"};
+    }
+    std::lock_guard<std::mutex> lock(serialPortMutex);
+    const int descriptor = open(
+        device.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC
+    );
+    if (descriptor < 0) return {{}, systemError("Unable to open " + device)};
+    FileDescriptor serial(descriptor);
+    std::string configurationError;
+    try {
+        configurationError = configureDescriptor(serial.get(), settings);
+    } catch (const std::exception& error) {
+        configurationError = error.what();
+    }
+    if (!configurationError.empty()) return {{}, configurationError};
+    if (tcflush(serial.get(), TCIFLUSH) < 0) {
+        return {{}, systemError("Unable to clear stale RFID serial data")};
+    }
+    if (const std::string error = writeBytes(serial.get(), transmitted);
+        !error.empty()) {
+        return {{}, error};
+    }
+    std::string received;
+    received.reserve(512);
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline && received.size() < 4096U) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now()
+        );
+        pollfd state{serial.get(), POLLIN, 0};
+        const int result = poll(
+            &state, 1, static_cast<int>(std::max<long long>(1, remaining.count()))
+        );
+        if (result < 0) {
+            if (errno == EINTR) continue;
+            return {received, systemError("RFID serial poll failed")};
+        }
+        if (result == 0) break;
+        if (state.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            return {received, "RFID serial port disconnected during debug read"};
+        }
+        std::array<char, 256> buffer{};
+        const ssize_t count = read(serial.get(), buffer.data(), buffer.size());
+        if (count > 0) {
+            received.append(buffer.data(), static_cast<std::size_t>(count));
+        } else if (count < 0 && errno != EAGAIN && errno != EWOULDBLOCK &&
+                   errno != EINTR) {
+            return {received, systemError("RFID serial read failed")};
+        }
+    }
+    return {received, {}};
+}
+
 std::string extractRfidTag(
     const std::string& bytes,
     std::size_t minimumLength,
@@ -298,6 +400,7 @@ SerialRfidReader::SerialRfidReader(
 std::string SerialRfidReader::initialize(
     std::chrono::milliseconds timeout
 ) const {
+    std::lock_guard<std::mutex> lock(serialPortMutex);
     if (protocol_ != RfidProtocol::UhfReader18) return {};
     if (timeout.count() <= 0 || timeout > std::chrono::seconds(10)) {
         return "RFID initialization timeout is invalid";
@@ -336,6 +439,7 @@ std::string SerialRfidReader::initialize(
 }
 
 std::string SerialRfidReader::discardPending() const {
+    std::lock_guard<std::mutex> lock(serialPortMutex);
     const int descriptor = open(
         device_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC
     );
@@ -354,6 +458,7 @@ std::string SerialRfidReader::discardPending() const {
 RfidReadResult SerialRfidReader::readTag(
     std::chrono::milliseconds timeout
 ) const {
+    std::lock_guard<std::mutex> lock(serialPortMutex);
     if (timeout.count() <= 0 || timeout > std::chrono::seconds(30)) {
         return {{}, "RFID read timeout is invalid"};
     }

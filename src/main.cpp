@@ -22,9 +22,9 @@
 #include <opencv2/imgproc.hpp>
 #ifdef PLATE_ENABLE_CAMERA
 #include "gate_controller.hpp"
+#include "serial_rfid_reader.hpp"
 #ifdef PLATE_ENABLE_GPIO
 #include "gate_gpio.hpp"
-#include "serial_rfid_reader.hpp"
 #include "status_leds.hpp"
 #endif
 #include <curl/curl.h>
@@ -703,7 +703,27 @@ bool sendRecognition(
 enum class RemoteCommandPoll {
     None,
     Capture,
+    BarrierOpen,
+    BarrierClose,
+    TrafficRed,
+    TrafficGreen,
+    RfidSerial,
     Error
+};
+
+struct RemoteCommandResult {
+    RemoteCommandPoll command = RemoteCommandPoll::None;
+    long commandId = 0;
+    std::string error;
+    std::string serialTxHex;
+    gate::SerialDebugSettings serialSettings;
+    long serialTimeoutMs = 2000;
+};
+
+struct SerialDebugCompletion {
+    long commandId = 0;
+    std::string transmittedHex;
+    gate::SerialDebugResult result;
 };
 
 std::string serverEndpoint(const std::string& serverUrl, const std::string& path) {
@@ -712,6 +732,51 @@ std::string serverEndpoint(const std::string& serverUrl, const std::string& path
         endpoint.pop_back();
     }
     return endpoint + path;
+}
+
+bool sendControllerStatus(
+    const std::string& serverUrl,
+    bool cameraConnected,
+    bool loopActive,
+    bool irBlocked,
+    bool barrierOpen,
+    bool trafficGreen,
+    bool plateUnrecognized,
+    bool detectorActive,
+    const std::string& gateState
+) {
+    if (serverUrl.empty()) return false;
+    CURL* client = curl_easy_init();
+    if (!client) return false;
+    const std::string endpoint = serverEndpoint(serverUrl, "/api/reader/status");
+    curl_mime* form = curl_mime_init(client);
+    const auto addField = [&form](const char* name, const std::string& value) {
+        curl_mimepart* part = curl_mime_addpart(form);
+        curl_mime_name(part, name);
+        curl_mime_data(part, value.c_str(), CURL_ZERO_TERMINATED);
+    };
+    const auto booleanText = [](bool value) { return value ? "1" : "0"; };
+    addField("camera_connected", booleanText(cameraConnected));
+    addField("loop_active", booleanText(loopActive));
+    addField("ir_blocked", booleanText(irBlocked));
+    addField("barrier_open", booleanText(barrierOpen));
+    addField("traffic_green", booleanText(trafficGreen));
+    addField("plate_unrecognized", booleanText(plateUnrecognized));
+    addField("detector_state", detectorActive ? "active" : "idle");
+    addField("gate_state", gateState);
+    std::string responseBody;
+    curl_easy_setopt(client, CURLOPT_URL, endpoint.c_str());
+    curl_easy_setopt(client, CURLOPT_MIMEPOST, form);
+    curl_easy_setopt(client, CURLOPT_CONNECTTIMEOUT_MS, 500L);
+    curl_easy_setopt(client, CURLOPT_TIMEOUT_MS, 1000L);
+    curl_easy_setopt(client, CURLOPT_WRITEFUNCTION, appendHttpResponse);
+    curl_easy_setopt(client, CURLOPT_WRITEDATA, &responseBody);
+    const CURLcode result = curl_easy_perform(client);
+    long status = 0;
+    curl_easy_getinfo(client, CURLINFO_RESPONSE_CODE, &status);
+    curl_mime_free(form);
+    curl_easy_cleanup(client);
+    return result == CURLE_OK && status >= 200 && status < 300;
 }
 
 bool serverHealthCheck(const std::string& serverUrl, std::string& errorMessage) {
@@ -801,6 +866,56 @@ bool parseJsonBool(const std::string& body, const std::string& field, bool& valu
     return false;
 }
 
+bool parseJsonString(
+    const std::string& body,
+    const std::string& field,
+    std::string& value
+) {
+    const std::string key = "\"" + field + "\"";
+    std::size_t position = body.find(key);
+    if (position == std::string::npos) return false;
+    position = body.find(':', position + key.size());
+    if (position == std::string::npos) return false;
+    position = body.find('"', position + 1);
+    if (position == std::string::npos) return false;
+    const std::size_t end = body.find('"', position + 1);
+    if (end == std::string::npos) return false;
+    value = body.substr(position + 1, end - position - 1);
+    return true;
+}
+
+std::string decodeHexBytes(const std::string& hexadecimal) {
+    if (hexadecimal.empty() || hexadecimal.size() % 2 != 0) return {};
+    std::string bytes;
+    bytes.reserve(hexadecimal.size() / 2);
+    for (std::size_t index = 0; index < hexadecimal.size(); index += 2) {
+        const std::string pair = hexadecimal.substr(index, 2);
+        try {
+            std::size_t consumed = 0;
+            const unsigned long value = std::stoul(pair, &consumed, 16);
+            if (consumed != 2 || value > 255) return {};
+            bytes.push_back(static_cast<char>(value));
+        } catch (const std::exception&) {
+            return {};
+        }
+    }
+    return bytes;
+}
+
+std::string printableSerialText(const std::string& bytes) {
+    std::ostringstream output;
+    for (const unsigned char byte : bytes) {
+        if (byte == '\r') output << "\\r";
+        else if (byte == '\n') output << "\\n\n";
+        else if (byte == '\t') output << "\\t";
+        else if (std::isprint(byte)) output << static_cast<char>(byte);
+        else output << "<0x" << std::uppercase << std::hex
+                    << std::setw(2) << std::setfill('0')
+                    << static_cast<unsigned int>(byte) << std::dec << '>';
+    }
+    return output.str();
+}
+
 long environmentLong(const char* name, long fallback) {
     const char* raw = std::getenv(name);
     if (!raw || *raw == '\0') {
@@ -813,22 +928,19 @@ long environmentLong(const char* name, long fallback) {
     }
 }
 
-RemoteCommandPoll pollRemoteCommand(
-    const std::string& serverUrl,
-    long& commandId,
-    std::string& errorMessage
-) {
-    commandId = 0;
-    errorMessage.clear();
+RemoteCommandResult pollRemoteCommand(const std::string& serverUrl) {
+    RemoteCommandResult poll;
     if (serverUrl.empty()) {
-        errorMessage = "PLATE_SERVER_URL is not configured";
-        return RemoteCommandPoll::Error;
+        poll.command = RemoteCommandPoll::Error;
+        poll.error = "PLATE_SERVER_URL is not configured";
+        return poll;
     }
 
     CURL* client = curl_easy_init();
     if (!client) {
-        errorMessage = "unable to initialize HTTP client";
-        return RemoteCommandPoll::Error;
+        poll.command = RemoteCommandPoll::Error;
+        poll.error = "unable to initialize HTTP client";
+        return poll;
     }
     std::string responseBody;
     const std::string endpoint = serverEndpoint(serverUrl, "/api/reader/commands/next");
@@ -846,24 +958,63 @@ RemoteCommandPoll pollRemoteCommand(
     curl_easy_cleanup(client);
 
     if (result != CURLE_OK) {
-        errorMessage = curl_easy_strerror(result);
-        return RemoteCommandPoll::Error;
+        poll.command = RemoteCommandPoll::Error;
+        poll.error = curl_easy_strerror(result);
+        return poll;
     }
     if (status == 204) {
-        return RemoteCommandPoll::None;
+        return poll;
     }
     if (status < 200 || status >= 300) {
-        errorMessage = responseBody.empty()
+        poll.command = RemoteCommandPoll::Error;
+        poll.error = responseBody.empty()
             ? "website returned HTTP " + std::to_string(status)
             : responseBody;
-        return RemoteCommandPoll::Error;
+        return poll;
     }
-    if (responseBody.find("\"capture\"") == std::string::npos ||
-        !parseJsonLong(responseBody, "command_id", commandId)) {
-        errorMessage = "website returned an invalid capture command";
-        return RemoteCommandPoll::Error;
+    std::string command;
+    if (!parseJsonString(responseBody, "command", command) ||
+        !parseJsonLong(responseBody, "command_id", poll.commandId)) {
+        poll.command = RemoteCommandPoll::Error;
+        poll.error = "website returned an invalid controller command";
+        return poll;
     }
-    return RemoteCommandPoll::Capture;
+    if (command == "capture") poll.command = RemoteCommandPoll::Capture;
+    else if (command == "barrier_open") poll.command = RemoteCommandPoll::BarrierOpen;
+    else if (command == "barrier_close") poll.command = RemoteCommandPoll::BarrierClose;
+    else if (command == "traffic_red") poll.command = RemoteCommandPoll::TrafficRed;
+    else if (command == "traffic_green") poll.command = RemoteCommandPoll::TrafficGreen;
+    else if (command == "rfid_serial") {
+        long baud = 0;
+        long dataBits = 0;
+        long stopBits = 0;
+        long timeoutMs = 0;
+        std::string parity;
+        if (!parseJsonString(responseBody, "tx_hex", poll.serialTxHex) ||
+            !parseJsonLong(responseBody, "baud", baud) ||
+            !parseJsonLong(responseBody, "data_bits", dataBits) ||
+            !parseJsonString(responseBody, "parity", parity) ||
+            !parseJsonLong(responseBody, "stop_bits", stopBits) ||
+            !parseJsonLong(responseBody, "timeout_ms", timeoutMs) ||
+            parity.size() != 1) {
+            poll.command = RemoteCommandPoll::Error;
+            poll.error = "website returned invalid RFID serial settings";
+            return poll;
+        }
+        poll.serialSettings = {
+            static_cast<int>(baud),
+            static_cast<int>(dataBits),
+            parity.front(),
+            static_cast<int>(stopBits)
+        };
+        poll.serialTimeoutMs = timeoutMs;
+        poll.command = RemoteCommandPoll::RfidSerial;
+    }
+    else {
+        poll.command = RemoteCommandPoll::Error;
+        poll.error = "website returned an unsupported controller command";
+    }
+    return poll;
 }
 
 bool reportRemoteCommand(
@@ -875,7 +1026,8 @@ bool reportRemoteCommand(
     long long yoloMilliseconds = -1,
     long long ocrMilliseconds = -1,
     long long serverMilliseconds = -1,
-    long long totalMilliseconds = -1
+    long long totalMilliseconds = -1,
+    const std::string& responseData = ""
 ) {
     if (commandId <= 0) {
         return true;
@@ -895,6 +1047,11 @@ bool reportRemoteCommand(
     part = curl_mime_addpart(form);
     curl_mime_name(part, "message");
     curl_mime_data(part, message.c_str(), CURL_ZERO_TERMINATED);
+    if (!responseData.empty()) {
+        part = curl_mime_addpart(form);
+        curl_mime_name(part, "response_data");
+        curl_mime_data(part, responseData.c_str(), CURL_ZERO_TERMINATED);
+    }
     const auto addTiming = [&form](
         const char* name,
         long long value
@@ -1104,13 +1261,15 @@ int runCamera(
         return 1;
     }
 #endif
-    const auto turnOffLedIfCameraDisconnected = [&]() {
+    const auto cameraConnectionIsPresent = [&]() {
 #if defined(PLATE_ENABLE_GPIO) && !defined(__APPLE__)
         const fs::path cameraDevice = "/dev/video" + std::to_string(cameraIndex);
         if (!fs::exists(cameraDevice)) {
             statusLeds->setCamera(false);
+            return false;
         }
 #endif
+        return true;
     };
 #ifdef PLATE_ENABLE_GPIO
     auto nextServerHealthCheck = std::chrono::steady_clock::time_point{};
@@ -1319,22 +1478,248 @@ int runCamera(
         std::cout << "Waiting for website commands in " << commandFile.string() << ".\n";
     }
 
+    bool telemetryCameraConnected = true;
+    bool telemetryLoopActive = false;
+    bool telemetryIrBlocked = false;
+    bool telemetryBarrierOpen = false;
+    bool telemetryTrafficGreen = false;
+    bool telemetryPlateUnrecognized = false;
+    bool telemetryDetectorActive = false;
+    std::string telemetryGateState = gateMode
+        ? gate::stateName(previousGateState)
+        : "disabled";
+    std::future<bool> telemetryFuture;
+    auto nextTelemetryAt = std::chrono::steady_clock::time_point{};
+    const auto queueTelemetry = [&](bool force = false) {
+        if (serverUrl.empty()) return;
+        if (telemetryFuture.valid()) {
+            if (telemetryFuture.wait_for(std::chrono::milliseconds(0)) !=
+                std::future_status::ready) {
+                return;
+            }
+            telemetryFuture.get();
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (!force && now < nextTelemetryAt) return;
+        nextTelemetryAt = now + std::chrono::seconds(1);
+        telemetryFuture = std::async(
+            std::launch::async,
+            sendControllerStatus,
+            serverUrl,
+            telemetryCameraConnected,
+            telemetryLoopActive,
+            telemetryIrBlocked,
+            telemetryBarrierOpen,
+            telemetryTrafficGreen,
+            telemetryPlateUnrecognized,
+            telemetryDetectorActive,
+            telemetryGateState
+        );
+    };
+    queueTelemetry(true);
+    std::future<RemoteCommandResult> gateCommandFuture;
+    auto nextGateCommandPollAt = std::chrono::steady_clock::time_point{};
+    std::vector<std::future<bool>> commandReportFutures;
+    const auto reportCommandAsync = [&](long commandId, bool success,
+                                         const std::string& message,
+                                         const std::string& responseData = "") {
+        commandReportFutures.erase(
+            std::remove_if(
+                commandReportFutures.begin(),
+                commandReportFutures.end(),
+                [](std::future<bool>& result) {
+                    if (result.wait_for(std::chrono::milliseconds(0)) !=
+                        std::future_status::ready) {
+                        return false;
+                    }
+                    result.get();
+                    return true;
+                }
+            ),
+            commandReportFutures.end()
+        );
+        commandReportFutures.push_back(std::async(
+            std::launch::async,
+            [serverUrl, commandId, success, message, responseData] {
+                return reportRemoteCommand(
+                    serverUrl, commandId, success, message,
+                    -1, -1, -1, -1, -1, responseData
+                );
+            }
+        ));
+    };
+    std::future<SerialDebugCompletion> serialDebugFuture;
+
     int captureNumber = 0;
     std::string command;
     while (true) {
         command.clear();
+        telemetryDetectorActive = false;
         bool loopTriggeredCapture = false;
         long activeCommandId = 0;
         if (gateMode) {
 #ifdef PLATE_ENABLE_GPIO
             while (command.empty()) {
-                turnOffLedIfCameraDisconnected();
+                telemetryCameraConnected = cameraConnectionIsPresent();
                 try {
                     const gate::Inputs inputs = gateGpio->readInputs();
                     const gate::Snapshot status = gateController->update(
                         std::chrono::steady_clock::now(), inputs
                     );
                     gateGpio->applyOutputs(status.outputs);
+                    telemetryLoopActive = inputs.loopPresent;
+                    telemetryIrBlocked = inputs.passageBlocked;
+                    if (status.state == gate::State::Opening) {
+                        telemetryBarrierOpen = true;
+                    } else if (
+                        status.state == gate::State::Closing ||
+                        status.state == gate::State::Rearming ||
+                        status.state == gate::State::IdleClosed
+                    ) {
+                        telemetryBarrierOpen = false;
+                    }
+                    telemetryTrafficGreen = status.outputs.trafficGreen;
+                    telemetryGateState = gate::stateName(status.state);
+                    queueTelemetry();
+                    const auto pollNow = std::chrono::steady_clock::now();
+                    if (serialDebugFuture.valid() &&
+                        serialDebugFuture.wait_for(std::chrono::milliseconds(0)) ==
+                            std::future_status::ready) {
+                        const SerialDebugCompletion completion =
+                            serialDebugFuture.get();
+                        std::ostringstream terminal;
+                        terminal << "TX HEX: " << completion.transmittedHex << '\n';
+                        if (!completion.result.received.empty()) {
+                            terminal << "RX HEX: "
+                                     << gate::encodeRfidBytes(
+                                            completion.result.received
+                                        ) << '\n'
+                                     << "RX TEXT: "
+                                     << printableSerialText(
+                                            completion.result.received
+                                        ) << '\n';
+                        } else {
+                            terminal << "RX HEX: (no data)\nRX TEXT: (no data)\n";
+                        }
+                        if (!completion.result.error.empty()) {
+                            terminal << "ERROR: " << completion.result.error << '\n';
+                        }
+                        reportCommandAsync(
+                            completion.commandId,
+                            completion.result.error.empty(),
+                            completion.result.error.empty()
+                                ? "RFID serial transaction completed"
+                                : "RFID serial transaction failed",
+                            terminal.str()
+                        );
+                    }
+                    if (gateCommandFuture.valid() &&
+                        gateCommandFuture.wait_for(std::chrono::milliseconds(0)) ==
+                            std::future_status::ready) {
+                        const RemoteCommandResult remote = gateCommandFuture.get();
+                        if (remote.command == RemoteCommandPoll::Capture) {
+                            activeCommandId = remote.commandId;
+                            telemetryDetectorActive = true;
+                            command = "capture";
+                            std::cout << "REMOTE CAPTURE " << activeCommandId
+                                      << ": received from website.\n";
+                        } else if (remote.command == RemoteCommandPoll::BarrierOpen) {
+                            const bool accepted = gateController->manualOpen(
+                                pollNow, inputs
+                            );
+                            reportCommandAsync(
+                                remote.commandId,
+                                accepted,
+                                accepted
+                                    ? "Manual boom-barrier OPEN accepted"
+                                    : "Manual OPEN rejected because the IR beam is blocked"
+                            );
+                        } else if (remote.command == RemoteCommandPoll::BarrierClose) {
+                            const bool accepted = gateController->manualClose(
+                                pollNow, inputs
+                            );
+                            reportCommandAsync(
+                                remote.commandId,
+                                accepted,
+                                accepted
+                                    ? "Manual boom-barrier CLOSE accepted"
+                                    : "Manual CLOSE rejected because the IR beam is blocked"
+                            );
+                        } else if (remote.command == RemoteCommandPoll::TrafficGreen ||
+                                   remote.command == RemoteCommandPoll::TrafficRed) {
+                            const bool green =
+                                remote.command == RemoteCommandPoll::TrafficGreen;
+                            gateController->testTrafficSignal(
+                                pollNow, green, std::chrono::seconds(3)
+                            );
+                            reportCommandAsync(
+                                remote.commandId,
+                                true,
+                                green
+                                    ? "Traffic signal GREEN test active for 3 seconds"
+                                    : "Traffic signal RED test active for 3 seconds"
+                            );
+                        } else if (remote.command == RemoteCommandPoll::RfidSerial) {
+                            const std::string transmitted = decodeHexBytes(
+                                remote.serialTxHex
+                            );
+                            if (!rfidEnabled || !serialRfidReader) {
+                                reportCommandAsync(
+                                    remote.commandId,
+                                    false,
+                                    "RFID serial debugging is unavailable because RFID is disabled"
+                                );
+                            } else if (transmitted.empty() ||
+                                       remote.serialTimeoutMs < 50 ||
+                                       remote.serialTimeoutMs > 10000) {
+                                reportCommandAsync(
+                                    remote.commandId,
+                                    false,
+                                    "RFID serial debug settings were rejected by the controller"
+                                );
+                            } else if (serialDebugFuture.valid()) {
+                                reportCommandAsync(
+                                    remote.commandId,
+                                    false,
+                                    "Another RFID serial transaction is still running"
+                                );
+                            } else {
+                                const std::string serialDevice =
+                                    std::getenv("RFID_SERIAL_DEVICE")
+                                        ? std::getenv("RFID_SERIAL_DEVICE")
+                                        : "/dev/serial0";
+                                serialDebugFuture = std::async(
+                                    std::launch::async,
+                                    [serialDevice, remote, transmitted] {
+                                        return SerialDebugCompletion{
+                                            remote.commandId,
+                                            remote.serialTxHex,
+                                            gate::transactSerial(
+                                                serialDevice,
+                                                remote.serialSettings,
+                                                transmitted,
+                                                std::chrono::milliseconds(
+                                                    remote.serialTimeoutMs
+                                                )
+                                            )
+                                        };
+                                    }
+                                );
+                            }
+                        }
+                        nextGateCommandPollAt = pollNow +
+                            std::chrono::milliseconds(250);
+                    }
+                    if (command.empty() && !gateCommandFuture.valid() &&
+                        pollNow >= nextGateCommandPollAt) {
+                        gateCommandFuture = std::async(
+                            std::launch::async,
+                            pollRemoteCommand,
+                            serverUrl
+                        );
+                        nextGateCommandPollAt = pollNow +
+                            std::chrono::milliseconds(500);
+                    }
                     if (status.state == gate::State::IdleClosed) {
                         // A health request may block briefly. Only perform it
                         // while the barrier is closed, never during movement.
@@ -1355,6 +1740,7 @@ int runCamera(
                         status.state == gate::State::IdleClosed
                     ) {
                         statusLeds->setPlateUnrecognized(false);
+                        telemetryPlateUnrecognized = false;
                     }
                     if (status.state != previousGateState) {
                         std::cout << "GATE STATE: " << gate::stateName(previousGateState)
@@ -1364,7 +1750,9 @@ int runCamera(
                         }
                         previousGateState = status.state;
                     }
-                    if (status.state == gate::State::Recognizing) {
+                    if (command.empty() && status.state == gate::State::Recognizing) {
+                        telemetryDetectorActive = true;
+                        queueTelemetry(true);
                         loopTriggeredCapture = true;
                         command = "capture";
                     } else {
@@ -1381,18 +1769,18 @@ int runCamera(
         } else if (remoteCommands) {
             auto lastError = std::chrono::steady_clock::time_point{};
             while (command.empty()) {
-                turnOffLedIfCameraDisconnected();
-                std::string pollError;
-                const RemoteCommandPoll result = pollRemoteCommand(
-                    serverUrl,
-                    activeCommandId,
-                    pollError
-                );
+                telemetryCameraConnected = cameraConnectionIsPresent();
+                const RemoteCommandResult remote = pollRemoteCommand(serverUrl);
+                const RemoteCommandPoll result = remote.command;
+                activeCommandId = remote.commandId;
+                queueTelemetry();
                 if (result == RemoteCommandPoll::Capture) {
 #ifdef PLATE_ENABLE_GPIO
                     statusLeds->setServer(true);
 #endif
                     command = "capture";
+                    telemetryDetectorActive = true;
+                    queueTelemetry(true);
                     std::cout << "REMOTE CAPTURE " << activeCommandId << ": received from website.\n";
                 } else if (result == RemoteCommandPoll::Error) {
 #ifdef PLATE_ENABLE_GPIO
@@ -1401,9 +1789,15 @@ int runCamera(
                     const auto now = std::chrono::steady_clock::now();
                     if (lastError.time_since_epoch().count() == 0 ||
                         now - lastError >= std::chrono::seconds(10)) {
-                        std::cerr << "WEBSITE POLL FAILED: " << pollError << '\n';
+                        std::cerr << "WEBSITE POLL FAILED: " << remote.error << '\n';
                         lastError = now;
                     }
+                } else if (result != RemoteCommandPoll::None) {
+                    reportCommandAsync(
+                        activeCommandId,
+                        false,
+                        "Hardware diagnostics require automatic GPIO gate mode"
+                    );
                 } else {
 #ifdef PLATE_ENABLE_GPIO
                     statusLeds->setServer(true);
@@ -1420,7 +1814,8 @@ int runCamera(
             }
         } else {
             while (command.empty()) {
-                turnOffLedIfCameraDisconnected();
+                telemetryCameraConnected = cameraConnectionIsPresent();
+                queueTelemetry();
 #ifdef PLATE_ENABLE_GPIO
                 refreshServerIndicator();
 #endif
@@ -1471,6 +1866,7 @@ int runCamera(
 #ifdef PLATE_ENABLE_GPIO
         statusLeds->setPlateUnrecognized(false);
 #endif
+        telemetryPlateUnrecognized = false;
         const auto startedAt = std::chrono::steady_clock::now();
         std::string rfidTag;
         std::string rfidReadError;
@@ -1539,6 +1935,7 @@ int runCamera(
                 );
                 return false;
             }
+            telemetryCameraConnected = true;
 #ifdef PLATE_ENABLE_GPIO
             statusLeds->setCamera(true);
 #endif
@@ -1663,6 +2060,9 @@ int runCamera(
 #endif
 
         if (frames.empty()) {
+            telemetryCameraConnected = false;
+            telemetryPlateUnrecognized = false;
+            queueTelemetry(true);
 #ifdef PLATE_ENABLE_GPIO
             statusLeds->setCamera(false);
             statusLeds->setPlateUnrecognized(false);
@@ -1698,6 +2098,7 @@ int runCamera(
         }
 
         if (candidates.empty()) {
+            telemetryPlateUnrecognized = true;
 #ifdef PLATE_ENABLE_GPIO
             statusLeds->setPlateUnrecognized(true);
 #endif
@@ -1901,6 +2302,8 @@ int runCamera(
             plate == "UNREADABLE" || (serverSent && !authorizedByServer)
         );
 #endif
+        telemetryPlateUnrecognized =
+            plate == "UNREADABLE" || (serverSent && !authorizedByServer);
 
         if (!headless) {
             cv::imshow("On-demand License Plate Recognition", annotatedFrame);
@@ -1949,6 +2352,12 @@ int runCamera(
 #endif
 
 int main(int argc, char** argv) {
+#ifdef PLATE_ENABLE_CAMERA
+    if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
+        std::cerr << "Unable to initialize the HTTP client runtime.\n";
+        return 1;
+    }
+#endif
     const bool cameraMode = argc > 1 && std::string(argv[1]) == "--camera";
     const bool headless = std::find_if(
         argv + 1,

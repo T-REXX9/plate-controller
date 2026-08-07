@@ -65,6 +65,9 @@ public:
         const std::string& reason = ""
     );
     bool acknowledgeFault(TimePoint now, const Inputs& inputs);
+    bool manualOpen(TimePoint now, const Inputs& inputs);
+    bool manualClose(TimePoint now, const Inputs& inputs);
+    void testTrafficSignal(TimePoint now, bool green, Milliseconds duration);
     Snapshot snapshot(TimePoint now, const Inputs& inputs) const;
 
     State state() const;
@@ -79,6 +82,8 @@ private:
     std::string faultReason_;
     std::optional<TimePoint> loopOccupiedSince_;
     std::optional<TimePoint> loopClearSince_;
+    std::optional<bool> trafficOverride_;
+    TimePoint trafficOverrideEndsAt_{};
 
     void transition(State next, TimePoint now);
     void enterFault(const std::string& reason, TimePoint now);

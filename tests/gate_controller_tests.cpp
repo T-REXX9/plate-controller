@@ -134,6 +134,36 @@ void faultsAreFailSafe() {
             "missing IR passage enters fault instead of closing blindly");
 }
 
+void manualDiagnosticsRemainSafe() {
+    Fixture fixture;
+    fixture.update();
+    require(fixture.controller.manualOpen(fixture.now, fixture.inputs),
+            "manual OPEN is accepted while the IR beam is clear");
+    auto status = fixture.update();
+    require(status.state == State::Opening && status.outputs.requestOpen,
+            "manual OPEN uses the normal protected opening state");
+
+    fixture.inputs.passageBlocked = true;
+    require(fixture.controller.manualOpen(fixture.now, fixture.inputs),
+            "manual OPEN remains available to clear an obstructed barrier");
+    require(!fixture.controller.manualClose(fixture.now, fixture.inputs),
+            "manual CLOSE is rejected while the IR beam is blocked");
+    fixture.inputs.passageBlocked = false;
+    require(fixture.controller.manualClose(fixture.now, fixture.inputs),
+            "manual CLOSE is accepted after the IR beam clears");
+    status = fixture.update();
+    require(status.state == State::Closing && status.outputs.requestClose,
+            "manual CLOSE uses the normal obstruction-aware closing state");
+
+    Fixture traffic;
+    traffic.update();
+    traffic.controller.testTrafficSignal(traffic.now, true, Milliseconds(3000));
+    require(traffic.update().outputs.trafficGreen,
+            "manual green test activates the traffic output");
+    require(!traffic.update(3000).outputs.trafficGreen,
+            "manual green test automatically returns to red");
+}
+
 }  // namespace
 
 int main() {
@@ -142,6 +172,7 @@ int main() {
     denialRequiresLoopClear();
     obstructionReopensAndBlocksCloseRelay();
     faultsAreFailSafe();
+    manualDiagnosticsRemainSafe();
     std::cout << "All gate-controller safety tests passed.\n";
     return 0;
 }

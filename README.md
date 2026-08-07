@@ -58,6 +58,23 @@ Five active-high status indicators are available:
 - Boom barrier open: BCM12, physical pin 32.
 - Plate not recognized: BCM13, physical pin 33.
 
+The controller also sends a lightweight one-second hardware heartbeat to Plate
+Program. Its dashboard mirrors the controller/server link, camera, inductive
+loop, IR safety beam, boom-barrier state, and red/green traffic output. Network
+reporting runs separately from the gate safety loop so a slow or unavailable PC
+cannot delay barrier control.
+
+Plate Program's administrator-only Hardware page can request protected manual
+OPEN/CLOSE cycles and three-second red/green traffic-light tests. These commands
+are polled asynchronously. Manual barrier movement remains inside the normal
+state machine, and CLOSE is rejected or interrupted whenever the IR beam is
+blocked.
+
+The Hardware page also provides an administrator-only RFID serial console. It
+can send validated HEX or plain-text commands with selectable baud rate, data
+bits, parity, stop bits, and read timeout. Controller-side locking prevents a
+debug transaction from interleaving bytes with an automatic RFID inventory.
+
 The optional RFID reader is controlled entirely through `/dev/serial0` on
 physical pins 8/10. Its tag number is printed in the live controller log.
 These are 3.3 V UART pins, so a true RS-232 reader requires an RS-232-to-3.3 V

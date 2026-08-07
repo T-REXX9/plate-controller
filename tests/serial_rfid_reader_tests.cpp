@@ -80,6 +80,27 @@ int main() {
     }
     require(rejected, "relative serial device path is rejected");
 
+    const gate::SerialDebugResult relativeDebug = gate::transactSerial(
+        "relative-device", {}, "\x05", std::chrono::milliseconds(500)
+    );
+    require(!relativeDebug.error.empty(),
+            "serial debug rejects a relative device path");
+    const gate::SerialDebugResult emptyDebug = gate::transactSerial(
+        "/dev/null", {}, {}, std::chrono::milliseconds(500)
+    );
+    require(!emptyDebug.error.empty(),
+            "serial debug rejects an empty transmission");
+    const gate::SerialDebugResult longDebug = gate::transactSerial(
+        "/dev/null", {}, std::string(513, 'A'), std::chrono::milliseconds(500)
+    );
+    require(!longDebug.error.empty(),
+            "serial debug enforces its transmission limit");
+    const gate::SerialDebugResult timeoutDebug = gate::transactSerial(
+        "/dev/null", {}, "\x05", std::chrono::milliseconds(20)
+    );
+    require(!timeoutDebug.error.empty(),
+            "serial debug rejects an unsafe timeout");
+
     std::cout << "All serial RFID parser tests passed.\n";
     return 0;
 }
