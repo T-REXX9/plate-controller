@@ -74,19 +74,29 @@ public:
     const std::string& faultReason() const;
 
 private:
+    enum class FaultRecovery {
+        None,
+        CloseAfterPassageClears
+    };
+
     Config config_;
     State state_ = State::Startup;
     TimePoint stateEnteredAt_{};
     TimePoint relayPulseEndsAt_{};
     bool started_ = false;
     std::string faultReason_;
+    FaultRecovery faultRecovery_ = FaultRecovery::None;
     std::optional<TimePoint> loopOccupiedSince_;
     std::optional<TimePoint> loopClearSince_;
     std::optional<bool> trafficOverride_;
     TimePoint trafficOverrideEndsAt_{};
 
     void transition(State next, TimePoint now);
-    void enterFault(const std::string& reason, TimePoint now);
+    void enterFault(
+        const std::string& reason,
+        TimePoint now,
+        FaultRecovery recovery = FaultRecovery::None
+    );
     bool inputStableFor(
         bool level,
         TimePoint now,

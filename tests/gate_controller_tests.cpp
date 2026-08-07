@@ -134,6 +134,41 @@ void faultsAreFailSafe() {
             "missing IR passage enters fault instead of closing blindly");
 }
 
+void prolongedPassageFaultClosesAndRearmsAfterClear() {
+    Fixture fixture;
+    fixture.update();
+    fixture.startRecognition();
+    fixture.controller.recognitionCompleted(fixture.now, true);
+    fixture.update(fixture.config.openingTravelTime.count());
+
+    fixture.inputs.loopPresent = false;
+    fixture.inputs.passageBlocked = true;
+    require(fixture.update().state == State::VehiclePassing,
+            "authorized vehicle blocks the IR beam while passing");
+    auto status = fixture.update(fixture.config.passageTimeout.count());
+    require(status.state == State::Fault,
+            "prolonged IR blockage remains safely open in a recoverable fault");
+    require(!status.outputs.requestClose,
+            "recoverable passage fault never closes while the beam is blocked");
+
+    fixture.inputs.passageBlocked = false;
+    status = fixture.update();
+    require(status.state == State::ClearanceWait,
+            "clearing the IR beam automatically resumes the protected close cycle");
+    status = fixture.update(fixture.config.clearanceTime.count());
+    require(status.state == State::Closing && status.outputs.requestClose,
+            "normal clearance delay is observed before closing after the fault");
+    fixture.update(fixture.config.closingTravelTime.count());
+    fixture.update();
+    fixture.update(fixture.config.inputDebounce.count());
+    require(fixture.controller.state() == State::IdleClosed,
+            "closed barrier rearms after a recoverable passage fault");
+
+    fixture.startRecognition();
+    require(fixture.controller.state() == State::Recognizing,
+            "the next vehicle can trigger recognition without manual intervention");
+}
+
 void manualDiagnosticsRemainSafe() {
     Fixture fixture;
     fixture.update();
@@ -172,6 +207,7 @@ int main() {
     denialRequiresLoopClear();
     obstructionReopensAndBlocksCloseRelay();
     faultsAreFailSafe();
+    prolongedPassageFaultClosesAndRearmsAfterClear();
     manualDiagnosticsRemainSafe();
     std::cout << "All gate-controller safety tests passed.\n";
     return 0;

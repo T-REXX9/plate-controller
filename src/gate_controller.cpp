@@ -18,6 +18,9 @@ Controller::Controller(Config config) : config_(std::move(config)) {
 void Controller::transition(State next, TimePoint now) {
     state_ = next;
     stateEnteredAt_ = now;
+    if (next != State::Fault) {
+        faultRecovery_ = FaultRecovery::None;
+    }
     loopOccupiedSince_.reset();
     loopClearSince_.reset();
     if (next == State::Opening || next == State::Closing) {
@@ -25,8 +28,13 @@ void Controller::transition(State next, TimePoint now) {
     }
 }
 
-void Controller::enterFault(const std::string& reason, TimePoint now) {
+void Controller::enterFault(
+    const std::string& reason,
+    TimePoint now,
+    FaultRecovery recovery
+) {
     faultReason_ = reason;
+    faultRecovery_ = recovery;
     transition(State::Fault, now);
 }
 
@@ -107,7 +115,11 @@ Snapshot Controller::update(TimePoint now, const Inputs& inputs) {
             if (!inputs.passageBlocked) {
                 transition(State::ClearanceWait, now);
             } else if (now - stateEnteredAt_ >= config_.passageTimeout) {
-                enterFault("Passage sensor remained blocked too long", now);
+                enterFault(
+                    "Passage sensor remained blocked too long",
+                    now,
+                    FaultRecovery::CloseAfterPassageClears
+                );
             }
             break;
 
@@ -146,6 +158,11 @@ Snapshot Controller::update(TimePoint now, const Inputs& inputs) {
             break;
 
         case State::Fault:
+            if (faultRecovery_ == FaultRecovery::CloseAfterPassageClears &&
+                !inputs.passageBlocked) {
+                faultReason_.clear();
+                transition(State::ClearanceWait, now);
+            }
             break;
     }
 
