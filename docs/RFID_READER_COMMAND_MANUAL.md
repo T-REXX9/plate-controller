@@ -166,15 +166,24 @@ If the reader sends repeated packets with response command `EE`, it is still ope
 
 ### Multi-tag inventory for this firmware
 
-Send:
+The following short multi-tag command was documented for this firmware:
 
 ```text
 04 00 01 DB 4B
 ```
 
-This uses the configured inventory duration and returns the EPC values detected
-during that window. Do not send `06 00 01 02 00 7C 62` to this reader: its older
-firmware interprets the two data bytes differently from newer protocol versions.
+The command below was subsequently confirmed during hardware testing as the
+working inventory-cycle command:
+
+```text
+06 00 01 02 00 7C 62
+```
+
+It first returns a command-`01` acknowledgement, then sends detected EPC values
+in delayed command-`EE` frames. Keep listening beyond the configured inventory
+duration; do not treat the acknowledgement as the EPC and do not clear the
+receive buffer after transmission. See `RFID_READER_README.md` for the complete
+observed response format and recommended parser behavior.
 
 ## Status and error bytes
 
@@ -226,5 +235,6 @@ This short form of command `35` returned `FD` because this reader requires all s
 | Set scan duration to 5 seconds | `05 00 25 32 6C 22` |
 | Get work-mode configuration | `04 00 36 E7 0E` |
 | Set Answer Mode | `0A 00 35 00 02 04 02 06 00 CD 09` |
+| Start tested inventory cycle | `06 00 01 02 00 7C 62` |
 | Perform one single-tag inventory | `04 00 0F A5 A2` |
 | Perform multi-tag inventory | `04 00 01 DB 4B` |

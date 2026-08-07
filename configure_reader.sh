@@ -93,7 +93,7 @@ case "${rfid_answer:-n}" in
     y|Y|yes|YES)
         rfid_enabled=1
         while true; do
-            read -r -p "RFID reader baud rate [9600]: " rfid_baud_rate_answer
+            read -r -p "RFID reader CURRENT baud rate [9600]: " rfid_baud_rate_answer
             rfid_baud_rate="${rfid_baud_rate_answer:-9600}"
             case "$rfid_baud_rate" in
                 1200|2400|4800|9600|19200|38400|57600|115200) break ;;
@@ -103,7 +103,7 @@ case "${rfid_answer:-n}" in
             esac
         done
         echo "RFID will use physical pins 8/10 via $rfid_serial_device at ${rfid_baud_rate} baud."
-        echo "The controller will select Answer Mode and request one CRC-checked inventory at a time."
+        echo "The setup can change the reader to 9600 baud and Answer Mode."
         if [[ "$(uname -s)" == "Linux" ]]; then
             boot_config=""
             boot_cmdline=""
@@ -134,7 +134,44 @@ case "${rfid_answer:-n}" in
             elif [[ -n "$boot_config" ]]; then
                 echo "Warning: run controller -configure with sudo to enable the UART automatically."
             fi
+
+            if command -v systemctl >/dev/null 2>&1 && [[ $EUID -eq 0 ]]; then
+                for serial_getty in \
+                    serial-getty@serial0.service \
+                    serial-getty@ttyAMA0.service \
+                    serial-getty@ttyS0.service; do
+                    systemctl disable --now "$serial_getty" >/dev/null 2>&1 || true
+                done
+            fi
         fi
+
+        echo
+        read -r -p "Configure this RFID reader for 9600 baud and Answer Mode now? [Y/n]: " initialize_rfid
+        case "${initialize_rfid:-y}" in
+            n|N|no|NO)
+                echo "Reader initialization skipped. The controller will use ${rfid_baud_rate} baud."
+                ;;
+            *)
+                echo "Keep the reader powered and do not disconnect its serial cable."
+                if [[ "$(uname -s)" != "Linux" ]]; then
+                    echo "Automatic RFID initialization requires Linux/Raspberry Pi OS." >&2
+                    exit 1
+                fi
+                if [[ ! -e "$rfid_serial_device" ]]; then
+                    echo "$rfid_serial_device is not available." >&2
+                    if [[ "$uart_reboot_required" == "1" ]]; then
+                        echo "Reboot the Raspberry Pi, then run controller -configure again." >&2
+                    else
+                        echo "Check the UART configuration and reader wiring." >&2
+                    fi
+                    exit 1
+                fi
+                python3 "$project_dir/configure_rfid_reader.py" \
+                    --device "$rfid_serial_device" \
+                    --current-baud "$rfid_baud_rate"
+                rfid_baud_rate=9600
+                ;;
+        esac
         ;;
     *)
         echo "RFID disabled. Plate-only authorization remains active."

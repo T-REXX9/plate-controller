@@ -85,9 +85,13 @@ uppercase hexadecimal without separators. Physical pin 36 is unused. A
 registered plate or an active RFID
 sticker independently authorizes the barrier; one credential does not fail merely
 because the other is absent or unknown. When RFID is disabled, plate-only
-authorization remains active. During
-`controller -configure`, select the baud rate stated in the RFID reader manual;
-the value is saved in the controller configuration rather than assumed.
+authorization remains active. During `controller -configure`, enter the
+reader's current baud rate and accept the initialization prompt. The setup
+verifies communication, changes the reader to 9600 baud when necessary, sends
+the complete Answer Mode configuration, reads the work mode back, and saves
+RFID configuration only after those checks pass. If UART boot configuration was
+just enabled and `/dev/serial0` is not available yet, reboot and run
+`controller -configure` again.
 
 Each LED requires its own 220–330 Ω series resistor. Complete wiring and
 indicator behavior are documented in
