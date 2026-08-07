@@ -68,15 +68,14 @@ server_status_led_gpio=5
 loop_status_led_gpio=6
 barrier_open_status_led_gpio=12
 plate_unrecognized_led_gpio=13
-rfid_output_gpio=16
-rfid_pulse_ms=1500
 rfid_enabled=0
 rfid_serial_device=/dev/serial0
 rfid_baud_rate=9600
-rfid_read_timeout_ms=2000
+rfid_read_timeout_ms=5000
 rfid_min_length=4
 rfid_max_length=64
-rfid_tag_bytes=12
+rfid_tag_bytes=0
+rfid_protocol=uhfreader18
 uart_reboot_required=0
 echo
 echo "Using the EMEET C950 4K profile: 3840x2160, MJPEG, 30 FPS, autofocus."
@@ -104,7 +103,7 @@ case "${rfid_answer:-n}" in
             esac
         done
         echo "RFID will use physical pins 8/10 via $rfid_serial_device at ${rfid_baud_rate} baud."
-        echo "Trigger output will use physical pin 36 / BCM16."
+        echo "The controller will select Answer Mode and request one CRC-checked inventory at a time."
         if [[ "$(uname -s)" == "Linux" ]]; then
             boot_config=""
             boot_cmdline=""
@@ -138,16 +137,14 @@ case "${rfid_answer:-n}" in
         fi
         ;;
     *)
-        echo "RFID disabled. Physical pin 36 will not be activated."
+        echo "RFID disabled. Plate-only authorization remains active."
         ;;
 esac
 
 read -r -p "Enable automatic GPIO gate mode? [y/N]: " gate_answer
 case "${gate_answer:-n}" in
     y|Y|yes|YES)
-        output_count=three
-        [[ "$rfid_enabled" == "1" ]] && output_count=four
-        read -r -p "Are the two switches and all $output_count protected 3.3 V output interfaces wired? [y/N]: " wiring_answer
+        read -r -p "Are the two switches and all three protected 3.3 V output interfaces wired? [y/N]: " wiring_answer
         case "${wiring_answer:-n}" in
             y|Y|yes|YES) gate_mode=1 ;;
             *)
@@ -161,14 +158,13 @@ esac
 
 mkdir -p "$(dirname "$config_path")"
 umask 077
-printf 'PLATE_SERVER_URL=%s\nCAMERA_INDEX=%s\nCAMERA_WIDTH=%s\nCAMERA_HEIGHT=%s\nCAMERA_FPS=%s\nCAMERA_FOURCC=%s\nCAMERA_STATUS_LED_GPIO=%s\nSERVER_STATUS_LED_GPIO=%s\nLOOP_STATUS_LED_GPIO=%s\nBARRIER_OPEN_STATUS_LED_GPIO=%s\nPLATE_UNRECOGNIZED_LED_GPIO=%s\nRFID_ENABLED=%s\nRFID_SERIAL_DEVICE=%s\nRFID_BAUD_RATE=%s\nRFID_READ_TIMEOUT_MS=%s\nRFID_MIN_LENGTH=%s\nRFID_MAX_LENGTH=%s\nRFID_TAG_BYTES=%s\nGATE_RFID_OUTPUT_GPIO=%s\nGATE_RFID_PULSE_MS=%s\nGATE_MODE=%s\n' \
+printf 'PLATE_SERVER_URL=%s\nCAMERA_INDEX=%s\nCAMERA_WIDTH=%s\nCAMERA_HEIGHT=%s\nCAMERA_FPS=%s\nCAMERA_FOURCC=%s\nCAMERA_STATUS_LED_GPIO=%s\nSERVER_STATUS_LED_GPIO=%s\nLOOP_STATUS_LED_GPIO=%s\nBARRIER_OPEN_STATUS_LED_GPIO=%s\nPLATE_UNRECOGNIZED_LED_GPIO=%s\nRFID_ENABLED=%s\nRFID_SERIAL_DEVICE=%s\nRFID_BAUD_RATE=%s\nRFID_PROTOCOL=%s\nRFID_READ_TIMEOUT_MS=%s\nRFID_MIN_LENGTH=%s\nRFID_MAX_LENGTH=%s\nRFID_TAG_BYTES=%s\nGATE_MODE=%s\n' \
     "$server_url" "$camera_index" "$camera_width" "$camera_height" \
     "$camera_fps" "$camera_fourcc" "$camera_status_led_gpio" \
     "$server_status_led_gpio" "$loop_status_led_gpio" \
     "$barrier_open_status_led_gpio" "$plate_unrecognized_led_gpio" \
-    "$rfid_enabled" "$rfid_serial_device" "$rfid_baud_rate" \
+    "$rfid_enabled" "$rfid_serial_device" "$rfid_baud_rate" "$rfid_protocol" \
     "$rfid_read_timeout_ms" "$rfid_min_length" "$rfid_max_length" "$rfid_tag_bytes" \
-    "$rfid_output_gpio" "$rfid_pulse_ms" \
     "$gate_mode" > "$config_path"
 chmod 600 "$config_path"
 

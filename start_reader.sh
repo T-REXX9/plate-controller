@@ -25,15 +25,14 @@ set +a
 : "${LOOP_STATUS_LED_GPIO:=6}"
 : "${BARRIER_OPEN_STATUS_LED_GPIO:=12}"
 : "${PLATE_UNRECOGNIZED_LED_GPIO:=13}"
-: "${GATE_RFID_OUTPUT_GPIO:=16}"
-: "${GATE_RFID_PULSE_MS:=1500}"
 : "${RFID_ENABLED:=0}"
 : "${RFID_SERIAL_DEVICE:=/dev/serial0}"
 : "${RFID_BAUD_RATE:=9600}"
-: "${RFID_READ_TIMEOUT_MS:=2000}"
+: "${RFID_PROTOCOL:=uhfreader18}"
+: "${RFID_READ_TIMEOUT_MS:=5000}"
 : "${RFID_MIN_LENGTH:=4}"
 : "${RFID_MAX_LENGTH:=64}"
-: "${RFID_TAG_BYTES:=12}"
+: "${RFID_TAG_BYTES:=0}"
 : "${GATE_MODE:=0}"
 : "${PLATE_OUTPUT_DIR:=$project_dir/Output}"
 
@@ -60,22 +59,13 @@ for gpio_name in \
     SERVER_STATUS_LED_GPIO \
     LOOP_STATUS_LED_GPIO \
     BARRIER_OPEN_STATUS_LED_GPIO \
-    PLATE_UNRECOGNIZED_LED_GPIO \
-    GATE_RFID_OUTPUT_GPIO; do
+    PLATE_UNRECOGNIZED_LED_GPIO; do
     gpio_value="${!gpio_name}"
     if [[ ! "$gpio_value" =~ ^([0-9]|1[0-9]|2[0-7])$ ]]; then
         echo "$gpio_name must be a BCM GPIO number from 0 to 27."
         exit 1
     fi
 done
-if [[ "$GATE_RFID_OUTPUT_GPIO" == "14" || "$GATE_RFID_OUTPUT_GPIO" == "15" ]]; then
-    echo "GATE_RFID_OUTPUT_GPIO cannot use physical pin 8 or 10 (BCM14/BCM15)."
-    exit 1
-fi
-if [[ ! "$GATE_RFID_PULSE_MS" =~ ^[1-9][0-9]*$ ]]; then
-    echo "GATE_RFID_PULSE_MS must be a positive integer."
-    exit 1
-fi
 if [[ "$RFID_SERIAL_DEVICE" != /* || "$RFID_SERIAL_DEVICE" =~ [[:space:]] ]]; then
     echo "RFID_SERIAL_DEVICE must be an absolute path without spaces."
     exit 1
@@ -84,6 +74,13 @@ case "$RFID_BAUD_RATE" in
     1200|2400|4800|9600|19200|38400|57600|115200) ;;
     *)
         echo "RFID_BAUD_RATE is unsupported."
+        exit 1
+        ;;
+esac
+case "$RFID_PROTOCOL" in
+    uhfreader18|passive) ;;
+    *)
+        echo "RFID_PROTOCOL must be uhfreader18 or passive."
         exit 1
         ;;
 esac
@@ -107,9 +104,8 @@ PLATE_SERVER_URL="${PLATE_SERVER_URL%/}"
 export PLATE_SERVER_URL CAMERA_INDEX CAMERA_WIDTH CAMERA_HEIGHT CAMERA_FPS \
     CAMERA_FOURCC CAMERA_STATUS_LED_GPIO SERVER_STATUS_LED_GPIO \
     LOOP_STATUS_LED_GPIO BARRIER_OPEN_STATUS_LED_GPIO \
-    PLATE_UNRECOGNIZED_LED_GPIO GATE_RFID_OUTPUT_GPIO \
-    GATE_RFID_PULSE_MS RFID_ENABLED RFID_SERIAL_DEVICE RFID_BAUD_RATE \
-    RFID_READ_TIMEOUT_MS RFID_MIN_LENGTH RFID_MAX_LENGTH RFID_TAG_BYTES
+    PLATE_UNRECOGNIZED_LED_GPIO RFID_ENABLED RFID_SERIAL_DEVICE RFID_BAUD_RATE \
+    RFID_PROTOCOL RFID_READ_TIMEOUT_MS RFID_MIN_LENGTH RFID_MAX_LENGTH RFID_TAG_BYTES
 mkdir -p "$PLATE_OUTPUT_DIR"
 
 server_available=0

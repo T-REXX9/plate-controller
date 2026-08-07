@@ -277,6 +277,13 @@ systemctl daemon-reload
 # Remove the obsolete token from configurations created by older releases.
 if [[ -f "$config_path" ]]; then
     sed -i '/^PLATE_API_KEY=/d' "$config_path"
+    sed -i '/^GATE_RFID_OUTPUT_GPIO=/d; /^GATE_RFID_PULSE_MS=/d' "$config_path"
+    if ! grep -q '^RFID_PROTOCOL=' "$config_path"; then
+        printf '%s\n' 'RFID_PROTOCOL=uhfreader18' >>"$config_path"
+    fi
+    if grep -q '^RFID_READ_TIMEOUT_MS=2000$' "$config_path"; then
+        sed -i 's/^RFID_READ_TIMEOUT_MS=2000$/RFID_READ_TIMEOUT_MS=5000/' "$config_path"
+    fi
 fi
 
 if ((refresh == 1)); then

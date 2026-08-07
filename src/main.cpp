@@ -24,7 +24,6 @@
 #include "gate_controller.hpp"
 #ifdef PLATE_ENABLE_GPIO
 #include "gate_gpio.hpp"
-#include "rfid_trigger_output.hpp"
 #include "serial_rfid_reader.hpp"
 #include "status_leds.hpp"
 #endif
@@ -36,7 +35,7 @@
 namespace fs = std::filesystem;
 
 constexpr int kInputSize = 640;
-constexpr float kConfidence = 0.55F;
+constexpr float kConfidence = 0.60F;
 constexpr float kNmsThreshold = 0.50F;
 
 struct LetterboxResult {
@@ -1150,9 +1149,7 @@ int runCamera(
     bool rfidEnabled = false;
 #ifdef PLATE_ENABLE_GPIO
     std::unique_ptr<gate::RaspberryPiGpio> gateGpio;
-    std::unique_ptr<gate::RfidTriggerOutput> rfidTriggerOutput;
     std::unique_ptr<gate::SerialRfidReader> serialRfidReader;
-    std::chrono::milliseconds rfidTriggerDuration{1500};
     std::chrono::milliseconds rfidReadTimeout{2000};
 #endif
     gate::State previousGateState = gate::State::Startup;
@@ -1196,34 +1193,29 @@ int runCamera(
         pins.traffic = configuredGateGpio("GATE_TRAFFIC_GPIO", 22);
         pins.open = configuredGateGpio("GATE_OPEN_GPIO", 23);
         pins.close = configuredGateGpio("GATE_CLOSE_GPIO", 24);
-        const unsigned int rfidGpio = configuredGateGpio(
-            "GATE_RFID_OUTPUT_GPIO", 16
-        );
         const long configuredRfidEnabled = environmentLong("RFID_ENABLED", 0);
         if (configuredRfidEnabled != 0 && configuredRfidEnabled != 1) {
             throw std::runtime_error("RFID_ENABLED must be 0 or 1");
         }
         rfidEnabled = configuredRfidEnabled == 1;
-        if (rfidEnabled && (rfidGpio == 14 || rfidGpio == 15)) {
-            throw std::runtime_error(
-                "GATE_RFID_OUTPUT_GPIO cannot use physical pin 8 or 10 "
-                "(BCM14/BCM15)"
-            );
-        }
-        const long configuredRfidPulse = environmentLong(
-            "GATE_RFID_PULSE_MS", 1500
-        );
-        if (rfidEnabled && configuredRfidPulse <= 0) {
-            throw std::runtime_error("GATE_RFID_PULSE_MS must be positive");
-        }
-        rfidTriggerDuration = std::chrono::milliseconds(configuredRfidPulse);
         const long configuredRfidTimeout = environmentLong(
-            "RFID_READ_TIMEOUT_MS", 2000
+            "RFID_READ_TIMEOUT_MS", 5000
         );
         const long configuredRfidBaud = environmentLong("RFID_BAUD_RATE", 9600);
         const long configuredRfidMinLength = environmentLong("RFID_MIN_LENGTH", 4);
         const long configuredRfidMaxLength = environmentLong("RFID_MAX_LENGTH", 64);
-        const long configuredRfidTagBytes = environmentLong("RFID_TAG_BYTES", 12);
+        const long configuredRfidTagBytes = environmentLong("RFID_TAG_BYTES", 0);
+        const std::string configuredRfidProtocol = std::getenv("RFID_PROTOCOL")
+            ? std::getenv("RFID_PROTOCOL")
+            : "uhfreader18";
+        gate::RfidProtocol rfidProtocol = gate::RfidProtocol::UhfReader18;
+        if (configuredRfidProtocol == "passive") {
+            rfidProtocol = gate::RfidProtocol::PassiveStream;
+        } else if (configuredRfidProtocol != "uhfreader18") {
+            throw std::runtime_error(
+                "RFID_PROTOCOL must be uhfreader18 or passive"
+            );
+        }
         if (rfidEnabled && (configuredRfidTimeout <= 0 ||
             configuredRfidTimeout > 30000)) {
             throw std::runtime_error(
@@ -1251,25 +1243,12 @@ int runCamera(
                 "A status LED GPIO conflicts with a gate GPIO assignment"
             );
         }
-        if (rfidEnabled && (conflictsWithStatusLed(rfidGpio) ||
-            rfidGpio == pins.loop ||
-            rfidGpio == pins.passage ||
-            rfidGpio == pins.traffic ||
-            rfidGpio == pins.open ||
-            rfidGpio == pins.close)) {
-            throw std::runtime_error(
-                "The RFID output GPIO conflicts with another GPIO assignment"
-            );
-        }
         const std::string chipPath = std::getenv("GATE_GPIO_CHIP")
             ? std::getenv("GATE_GPIO_CHIP")
             : "/dev/gpiochip0";
         gateController = std::make_unique<gate::Controller>(gateConfig);
         gateGpio = std::make_unique<gate::RaspberryPiGpio>(chipPath, pins);
         if (rfidEnabled) {
-            rfidTriggerOutput = std::make_unique<gate::RfidTriggerOutput>(
-                chipPath, rfidGpio
-            );
             const std::string serialDevice = std::getenv("RFID_SERIAL_DEVICE")
                 ? std::getenv("RFID_SERIAL_DEVICE")
                 : "/dev/serial0";
@@ -1278,8 +1257,20 @@ int runCamera(
                 static_cast<int>(configuredRfidBaud),
                 static_cast<std::size_t>(configuredRfidMinLength),
                 static_cast<std::size_t>(configuredRfidMaxLength),
-                static_cast<std::size_t>(configuredRfidTagBytes)
+                static_cast<std::size_t>(configuredRfidTagBytes),
+                rfidProtocol
             );
+            const std::string initializationError = serialRfidReader->initialize(
+                std::chrono::milliseconds(2000)
+            );
+            if (!initializationError.empty()) {
+                std::cerr << "RFID INITIALIZATION WARNING: "
+                          << initializationError
+                          << ". Plate authorization remains available.\n";
+            } else if (rfidProtocol == gate::RfidProtocol::UhfReader18) {
+                std::cout << "RFID INITIALIZED: UHFReader18 Answer Mode; "
+                             "single inventory will be requested on each gate cycle.\n";
+            }
         }
         const auto initialInputs = gateGpio->readInputs();
         const auto initialStatus = gateController->update(
@@ -1296,15 +1287,14 @@ int runCamera(
                   << " open=" << pins.open
                   << " close=" << pins.close << ".\n";
         if (rfidEnabled) {
-            std::cout << "RFID enabled: trigger BCM" << rfidGpio
-                      << ", UART "
+            std::cout << "RFID enabled: serial inventory over UART "
                       << (std::getenv("RFID_SERIAL_DEVICE")
                             ? std::getenv("RFID_SERIAL_DEVICE")
                             : "/dev/serial0")
-                      << ", " << configuredRfidBaud << " baud.\n";
+                      << ", " << configuredRfidBaud << " baud, protocol "
+                      << configuredRfidProtocol << ".\n";
         } else {
-            std::cout << "RFID disabled: BCM" << rfidGpio
-                      << " will remain inactive and unclaimed.\n";
+            std::cout << "RFID disabled: plate-only authorization remains active.\n";
         }
         } catch (const std::exception& error) {
             std::cerr << "Unable to start gate GPIO: " << error.what() << '\n';
@@ -1460,7 +1450,7 @@ int runCamera(
         }
         if (command == "help") {
             std::cout
-                << "capture  Try one 4K frame, then use one fallback frame when uncertain.\n"
+                << "capture  Capture and evaluate two fresh 4K frames.\n"
                 << "status   Show whether the camera and models are idle.\n"
                 << "quit     Release the camera and stop the reader.\n";
             continue;
@@ -1499,13 +1489,10 @@ int runCamera(
                         }
                     );
                 }
-                rfidTriggerOutput->pulse(rfidTriggerDuration);
-                std::cout << "RFID TRIGGER: LOW for "
-                          << rfidTriggerDuration.count()
-                          << " ms; UART read and camera capture starting.\n";
+                std::cout << "RFID INVENTORY: serial request and camera capture starting.\n";
             } catch (const std::exception& error) {
                 gateGpio->safeOutputs();
-                std::cerr << "RFID TRIGGER FAILURE: " << error.what() << '\n';
+                std::cerr << "RFID INVENTORY FAILURE: " << error.what() << '\n';
                 camera.release();
                 return 1;
             }
@@ -1514,15 +1501,13 @@ int runCamera(
         const auto millisecondsBetween = [](const auto& beginning, const auto& end) {
             return std::chrono::duration_cast<std::chrono::milliseconds>(end - beginning).count();
         };
-        constexpr int maximumCaptureFrameCount = 2;
+        constexpr int captureFrameCount = 2;
         constexpr int ocrCandidateCount = 2;
-        constexpr double fastPathMinimumQuality = 0.60;
-        constexpr double fastPathMinimumOcrConfidence = 0.90;
         long long framesMilliseconds = 0;
         long long yoloMilliseconds = 0;
         long long ocrMilliseconds = 0;
         std::cout << "CAPTURE " << captureNumber
-                  << ": acquiring one fresh 4K frame for the adaptive fast path...\n";
+                  << ": acquiring two fresh 4K frames...\n";
 
         // Drop stale UVC buffers without retrieving and JPEG-decoding pixels
         // that will never be used. read() below decodes only retained frames.
@@ -1538,7 +1523,7 @@ int runCamera(
         );
 
         std::vector<cv::Mat> frames;
-        frames.reserve(maximumCaptureFrameCount);
+        frames.reserve(captureFrameCount);
         std::vector<BurstCandidate> candidates;
         const std::string captureStem = fs::path(
             eventSnapshotName("CAPTURE", captureNumber)
@@ -1575,7 +1560,7 @@ int runCamera(
                 std::chrono::steady_clock::now()
             );
             std::cout << "CAPTURE " << captureNumber << ": frame "
-                      << frameIndex + 1 << '/' << maximumCaptureFrameCount
+                      << frameIndex + 1 << '/' << captureFrameCount
                       << " - YOLO found "
                       << detections.size() << " plate region(s).\n";
 
@@ -1650,31 +1635,12 @@ int runCamera(
             }
         };
 
-        captureAndDetect();
-        bool usedFastPath = false;
+        for (int attempt = 0; attempt < captureFrameCount; ++attempt) {
+            captureAndDetect();
+        }
         if (!candidates.empty()) {
             rankCandidates();
             readCandidates();
-            const OcrVote& firstVote = votes.front();
-            usedFastPath =
-                firstVote.reading != "UNREADABLE" &&
-                firstVote.quality >= fastPathMinimumQuality &&
-                firstVote.ocrConfidence >= fastPathMinimumOcrConfidence;
-        }
-
-        if (usedFastPath) {
-            std::cout << "CAPTURE " << captureNumber
-                      << ": high-confidence first frame; skipping the fallback frame.\n";
-        } else {
-            std::cout << "CAPTURE " << captureNumber
-                      << ": first frame uncertain; acquiring one fallback frame.\n";
-            for (int attempt = 1; attempt < maximumCaptureFrameCount; ++attempt) {
-                captureAndDetect();
-            }
-            if (!candidates.empty()) {
-                rankCandidates();
-                readCandidates();
-            }
         }
 
 #ifdef PLATE_ENABLE_GPIO
@@ -1920,18 +1886,6 @@ int runCamera(
                 if (!parseJsonBool(serverResponse, "authorized", authorizedByServer)) {
                     authorizedByServer = false;
                     std::cerr << "SERVER RESPONSE DID NOT INCLUDE AUTHORIZATION; access denied.\n";
-                }
-                if (rfidRequired) {
-                    bool rfidAuthorized = false;
-                    if (!parseJsonBool(
-                            serverResponse,
-                            "rfid_authorized",
-                            rfidAuthorized
-                        ) || !rfidAuthorized) {
-                        authorizedByServer = false;
-                        std::cerr << "SERVER DID NOT AUTHORIZE THE REQUIRED RFID; "
-                                     "access denied.\n";
-                    }
                 }
             } else {
 #ifdef PLATE_ENABLE_GPIO

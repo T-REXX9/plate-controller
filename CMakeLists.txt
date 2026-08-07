@@ -41,7 +41,6 @@ if(PLATE_ENABLE_GPIO)
         PRIVATE
             src/status_leds.cpp
             src/gate_gpio.cpp
-            src/rfid_trigger_output.cpp
             src/serial_rfid_reader.cpp
     )
     target_compile_definitions(plate_reader PRIVATE PLATE_ENABLE_GPIO=1)

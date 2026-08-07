@@ -142,7 +142,6 @@ set +a
 : "${RFID_ENABLED:=0}"
 : "${RFID_SERIAL_DEVICE:=/dev/serial0}"
 : "${RFID_BAUD_RATE:=9600}"
-: "${GATE_RFID_OUTPUT_GPIO:=16}"
 
 echo
 if systemctl is-active --quiet "$service_name"; then
@@ -208,7 +207,7 @@ fi
 echo
 if [[ "$RFID_ENABLED" != "1" ]]; then
     echo "[ SCAN ] Checking optional RFID reader..............[DISABLED]"
-    pass "RFID mode is disabled; physical pin 36 remains inactive."
+    pass "RFID mode is disabled; plate-only authorization remains active."
 elif [[ ! -e "$RFID_SERIAL_DEVICE" ]]; then
     printf '[ SCAN ] Probing %-29s[MISSING]\n' "$RFID_SERIAL_DEVICE"
     fail "Configured RFID UART is missing: $RFID_SERIAL_DEVICE"
@@ -219,7 +218,7 @@ else
     pass "Configured RFID UART exists and is ready for the controller."
     detail "├─ Device : $RFID_SERIAL_DEVICE${resolved_rfid_device:+ -> $resolved_rfid_device}"
     detail "├─ Format : ${RFID_BAUD_RATE} baud, 8 data bits, no parity, 1 stop bit"
-    detail "└─ Trigger: physical pin 36 / BCM $GATE_RFID_OUTPUT_GPIO (active LOW)"
+    detail "└─ Mode   : serial Answer Mode with on-demand inventory"
     if [[ ! -r "$RFID_SERIAL_DEVICE" || ! -w "$RFID_SERIAL_DEVICE" ]]; then
         fail "The diagnostic user cannot read and write the RFID UART."
         hint "Run controller -update so the service user receives dialout access."

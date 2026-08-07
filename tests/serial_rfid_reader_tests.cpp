@@ -39,6 +39,39 @@ int main() {
     require(gate::extractRfidTag("x\r\n").empty(),
             "short serial noise is rejected");
 
+    const std::string firstFrame{
+        "\x13\x00\x0F\x01\x01\x0C\xE2\x84\x36\x11"
+        "\x00\x00\x10\x00\x09\x49\x44\xAA\xDA\xFF",
+        20
+    };
+    require(
+        gate::extractUhfReader18Epc(firstFrame) ==
+            "E284361100001000094944AA",
+        "confirmed single-inventory frame yields only its EPC"
+    );
+    const std::string secondFrame{
+        "\x13\x00\x0F\x01\x01\x0C\x20\x26\x05\x27"
+        "\x00\x00\x00\x00\x00\x01\x97\x05\x87\x2A",
+        20
+    };
+    require(
+        gate::extractUhfReader18Epc(secondFrame) ==
+            "202605270000000000019705",
+        "a second confirmed EPC keeps its leading zeroes"
+    );
+    const std::string noTagFrame{"\x05\x00\x0F\xFB\xE2\xA7", 6};
+    require(gate::extractUhfReader18Epc(noTagFrame).empty(),
+            "a CRC-valid no-tag response is not mistaken for an EPC");
+    std::string corrupted = firstFrame;
+    corrupted.back() ^= 0x01;
+    require(gate::extractUhfReader18Epc(corrupted).empty(),
+            "a response with an invalid CRC is rejected");
+    require(
+        gate::extractUhfReader18Epc(noTagFrame + secondFrame) ==
+            "202605270000000000019705",
+        "the parser skips a no-tag frame and finds the next valid EPC"
+    );
+
     bool rejected = false;
     try {
         gate::SerialRfidReader invalid("relative-device", 9600);

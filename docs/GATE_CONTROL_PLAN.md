@@ -2,7 +2,7 @@
 
 ## Electrical contract
 
-The Raspberry Pi uses eleven BCM GPIO lines:
+The Raspberry Pi uses ten BCM GPIO lines:
 
 | Signal | GPIO behavior |
 | --- | --- |
@@ -11,7 +11,6 @@ The Raspberry Pi uses eleven BCM GPIO lines:
 | Traffic selector | LOW means red; HIGH means green |
 | Open command | LOW for one second, otherwise HIGH |
 | Close command | LOW for one second, otherwise HIGH |
-| RFID capture trigger | Normally HIGH; LOW for 1.5 seconds when loop-triggered capture starts |
 | Camera status LED | LOW while unavailable; HIGH after a working camera is recognized |
 | Server status LED | LOW while unreachable; HIGH after a successful server response |
 | Loop status LED | LOW while clear; HIGH while a vehicle is present |
@@ -20,27 +19,26 @@ The Raspberry Pi uses eleven BCM GPIO lines:
 
 The open and close outputs are mutually exclusive. OPEN and CLOSE start and
 stop HIGH while traffic starts and stops LOW (red), meaning no movement request.
-The RFID trigger starts and stops HIGH. All five status LED outputs start and
-stop LOW.
+All five status LED outputs start and stop LOW.
 
 ## Automatic sequence
 
 1. The controller starts red with both movement outputs HIGH and inactive.
 2. The grounded inductive-loop input must remain LOW for the debounce interval.
-3. One cycle is locked. When optional RFID mode is enabled, the RFID trigger
-   switches LOW asynchronously for 1.5 seconds, the UART listens on physical
-   pins 8/10, and camera capture starts at the same time. When RFID is disabled,
-   physical pin 36 is not activated.
-4. The reader tries one fresh 4K frame, with one
-   additional frame captured only when detection or OCR is uncertain.
+3. One cycle is locked. When optional RFID mode is enabled, the controller sends
+   the UHFReader18 single-inventory command over physical pins 8/10, validates
+   the response frame and CRC, and camera capture starts at the same time. No
+   separate GPIO trigger output is used.
+4. The reader captures two fresh 4K frames and applies a 60% minimum YOLO
+   confidence threshold to both.
 5. YOLO detects the strongest plate crop in each frame.
 6. Each plate row is converted to grayscale and PP-OCRv5 produces a consensus.
 7. The plate, crop when available, and canonical RFID value are sent to the PC
    website for MySQL authorization.
-8. With RFID disabled, plate authorization continues to work by itself. With
-   RFID enabled, an active sticker present in the RFID table authorizes the
-   barrier independently of plate OCR. A missing, unregistered, expired,
-   inactive, or failed RFID result remains red and produces no movement pulse.
+8. The decision is OR-based: an active, unexpired plate registration or an active
+   RFID sticker authorizes the barrier independently. Access is denied only when
+   neither credential is authorized. An unreadable plate can therefore succeed
+   through RFID, and a missing or unknown RFID can succeed through the plate.
 9. Only an authorized result switches the traffic output HIGH and pulses OPEN
    LOW for exactly one second. The loop must clear before a denied cycle retries.
 10. After the configured opening travel delay, the controller waits for the IR
@@ -90,8 +88,8 @@ stateDiagram-v2
 
 - `src/gate_controller.cpp`: deterministic state machine and safety interlock
 - `src/gate_gpio.cpp`: Raspberry Pi libgpiod input/output backend
-- `src/rfid_trigger_output.cpp`: asynchronous active-low RFID capture pulse
-- `src/main.cpp`: adaptive recognition and server-authorization integration
+- `src/serial_rfid_reader.cpp`: serial RFID configuration, inventory, and CRC validation
+- `src/main.cpp`: two-frame recognition and server-authorization integration
 - `src/gate_simulator.cpp`: macOS and bench simulator
 - `tests/gate_controller_tests.cpp`: automated timing and obstruction tests
 - `docs/GATE_WIRING_DIAGRAM.md`: GPIO/header wiring diagram

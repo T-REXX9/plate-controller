@@ -9,7 +9,8 @@ the separate PC web server and does not host a website or database.
 
 1. Keep the camera open while YOLO and OCR remain idle.
 2. Wait for an administrator to press **Capture plate** on the PC dashboard.
-3. Acquire one fresh full-resolution frame and run YOLO plus PP-OCRv5.
+3. Acquire two fresh full-resolution frames, run YOLO at 60% minimum confidence,
+   and evaluate the strongest crops with PP-OCRv5.
 4. Return immediately when the first plate crop and OCR probabilities are strong.
 5. When uncertain, acquire one more frame and use two-sample OCR consensus.
 6. Return the final clean alphanumeric value without imposing a plate format.
@@ -57,16 +58,17 @@ Five active-high status indicators are available:
 - Boom barrier open: BCM12, physical pin 32.
 - Plate not recognized: BCM13, physical pin 33.
 
-The optional RFID system trigger uses BCM16 (physical pin 36). It remains HIGH normally,
-switches LOW when a debounced loop detection starts camera capture, and returns
-HIGH after 1.5 seconds without delaying YOLO or OCR. The tag number is read from
-`/dev/serial0` on physical pins 8/10 and printed in the live controller log.
+The optional RFID reader is controlled entirely through `/dev/serial0` on
+physical pins 8/10. Its tag number is printed in the live controller log.
 These are 3.3 V UART pins, so a true RS-232 reader requires an RS-232-to-3.3 V
-TTL transceiver. When RFID is enabled, an active sticker found in the server's
-RFID table authorizes the barrier even when plate OCR is unreadable. When RFID
-is disabled, BCM16 is not claimed and the existing plate-only authorization
-remains active. The 12-byte binary value is logged and uploaded as uppercase
-hexadecimal without separators. During
+TTL transceiver. The confirmed UHFReader18-compatible reader is placed in Answer
+Mode when the controller starts. On each loop-triggered cycle the controller sends
+`04 00 0F A5 A2`, validates the returned CRC, and uploads only the EPC bytes as
+uppercase hexadecimal without separators. Physical pin 36 is unused. A
+registered plate or an active RFID
+sticker independently authorizes the barrier; one credential does not fail merely
+because the other is absent or unknown. When RFID is disabled, plate-only
+authorization remains active. During
 `controller -configure`, select the baud rate stated in the RFID reader manual;
 the value is saved in the controller configuration rather than assumed.
 

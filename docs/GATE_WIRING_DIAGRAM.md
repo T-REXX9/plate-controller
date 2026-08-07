@@ -12,8 +12,6 @@ The program enables each GPIO's internal pull-up resistor.
 - Open and close outputs: normally HIGH; the selected output goes LOW for
   exactly one second and then returns HIGH.
 - Open and close are never driven LOW together.
-- RFID trigger output: normally HIGH; LOW for 1.5 seconds when loop-triggered
-  camera capture starts.
 
 ## Clean wiring diagram
 
@@ -74,9 +72,6 @@ Pin 16 / BCM23 ────────────► Channel 2 ─────
 
 Pin 18 / BCM24 ────────────► Channel 3 ───────────────────► CLOSE
                               Idle HIGH; LOW for 1 second
-
-Pin 36 / BCM16 ────────────► Channel 4 ───────────────────► RFID capture trigger
-                              Idle HIGH; LOW for 1.5 seconds
 ```
 
 ```text
@@ -97,7 +92,6 @@ Use BCM numbers in software. Physical pin numbers refer to the Raspberry Pi
 | Traffic red/green selector | 22 | 15 | LOW red, HIGH green |
 | Barrier open command | 23 | 16 | Idle HIGH; LOW for one second |
 | Barrier close command | 24 | 18 | Idle HIGH; LOW for one second |
-| RFID capture trigger | 16 | 36 | Used only when RFID is enabled; idle HIGH; LOW for 1.5 seconds at capture start |
 | Camera detected LED | 25 | 22 | LOW off; HIGH detected |
 | Server detected LED | 5 | 29 | LOW off; HIGH reachable |
 | Loop detector active LED | 6 | 31 | LOW off; HIGH vehicle present |
@@ -119,9 +113,6 @@ Never connect an RS-232 signal directly to the GPIO header.
 RFID reader RS-232 TX ──► RS-232/3.3 V transceiver ──► Pi pin 10 / GPIO15 RX
 RFID reader RS-232 RX ◄── RS-232/3.3 V transceiver ◄── Pi pin  8 / GPIO14 TX
 Transceiver TTL GND  ───────────────────────────────── Pi pin  6 / GND
-
-Pi pin 36 / GPIO16 ──► protected active-LOW RFID trigger input
-                       (external 10 kΩ pull-up to 3.3 V recommended)
 ```
 
 The TX connection is optional only when the specific reader continuously sends
@@ -132,9 +123,9 @@ baud rate stated in the reader manual. The current reader profile expects a
 separators. For example, bytes `0x30 0x45 ... 0x3F 0x90` become
 `3045673030553F9030553F90`.
 
-When `controller -configure` is answered with no RFID reader, GPIO16 is not
-claimed or pulsed. With RFID enabled, a loop event pulses GPIO16 LOW for 1.5
-seconds while the UART waits for the tag number.
+With RFID enabled, a loop event sends the inventory command through the serial
+TX line while the UART waits for the tag number. Physical pin 36 / GPIO16 is
+unused and requires no connection.
 
 ## Toggle-switch connections
 
@@ -153,22 +144,19 @@ dry contact, open-drain interface, or opto-isolator.
 The GPIO outputs are Raspberry Pi 3.3 V logic signals only. They are not
 5 V-tolerant and cannot accept or switch 12/24 V directly.
 
-If the traffic controller, RFID system, or barrier inputs are not explicitly
+If the traffic controller or barrier inputs are not explicitly
 compatible with 3.3 V logic, connect each GPIO through an opto-isolator,
 transistor interface, or appropriate relay module. The OPEN and CLOSE
 interfaces must respond to a LOW GPIO pulse and remain inactive while the GPIO
 is HIGH. Never connect a higher-voltage barrier or RFID signal directly to the
 Pi.
 
-For boot-time safety, add separate 10 kΩ pull-ups from BCM23, BCM24, and BCM16
-to 3.3 V at their protected interfaces. This holds OPEN, CLOSE, and the RFID
-trigger inactive before the controller program claims the GPIO lines. Do not
-use physical header pins 8 or 10 for the RFID output.
+For boot-time safety, add separate 10 kΩ pull-ups from BCM23 and BCM24 to 3.3 V
+at their protected interfaces. This holds OPEN and CLOSE inactive before the
+controller program claims the GPIO lines.
 
 At program startup and shutdown, BCM22 is driven LOW while BCM23 and BCM24 are
-driven HIGH. This selects red and prevents accidental barrier movement. BCM16
-is driven HIGH only when RFID is enabled; otherwise the program leaves it
-unclaimed and the external pull-up keeps the RFID trigger inactive.
+driven HIGH. This selects red and prevents accidental barrier movement.
 
 ## Enable automatic gate mode
 
