@@ -37,6 +37,47 @@ namespace fs = std::filesystem;
 constexpr int kInputSize = 640;
 constexpr float kConfidence = 0.60F;
 constexpr float kNmsThreshold = 0.50F;
+std::string gControllerId = "legacy-plate-controller";
+
+std::string controllerIdentity() {
+    std::string identity;
+    if (const char* configured = std::getenv("CONTROLLER_ID")) {
+        identity = configured;
+    }
+    if (identity.empty()) {
+        std::ifstream cpuInfo("/proc/cpuinfo");
+        std::string line;
+        while (std::getline(cpuInfo, line)) {
+            if (line.rfind("Serial", 0) == 0) {
+                const std::size_t separator = line.find(':');
+                if (separator != std::string::npos) {
+                    identity = line.substr(separator + 1);
+                    break;
+                }
+            }
+        }
+    }
+    if (identity.empty()) {
+        std::ifstream machineId("/etc/machine-id");
+        std::getline(machineId, identity);
+    }
+    identity.erase(
+        std::remove_if(identity.begin(), identity.end(), [](unsigned char value) {
+            return std::isspace(value) != 0;
+        }),
+        identity.end()
+    );
+    for (char& value : identity) {
+        const unsigned char byte = static_cast<unsigned char>(value);
+        if (!std::isalnum(byte) && value != '.' && value != '_' &&
+            value != ':' && value != '-') {
+            value = '-';
+        }
+    }
+    if (identity.empty()) identity = "unknown";
+    if (identity.size() > 58) identity.resize(58);
+    return "plate-" + identity;
+}
 
 struct LetterboxResult {
     cv::Mat image;
@@ -646,6 +687,9 @@ bool sendRecognition(
     curl_mime_name(part, "detector_confidence");
     curl_mime_data(part, confidence.c_str(), CURL_ZERO_TERMINATED);
     part = curl_mime_addpart(form);
+    curl_mime_name(part, "controller_id");
+    curl_mime_data(part, gControllerId.c_str(), CURL_ZERO_TERMINATED);
+    part = curl_mime_addpart(form);
     curl_mime_name(part, "rfid");
     curl_mime_data(part, rfidTag.c_str(), CURL_ZERO_TERMINATED);
     part = curl_mime_addpart(form);
@@ -757,6 +801,7 @@ bool sendControllerStatus(
     };
     const auto booleanText = [](bool value) { return value ? "1" : "0"; };
     addField("camera_connected", booleanText(cameraConnected));
+    addField("controller_id", gControllerId);
     addField("loop_active", booleanText(loopActive));
     addField("ir_blocked", booleanText(irBlocked));
     addField("barrier_open", booleanText(barrierOpen));
@@ -946,7 +991,8 @@ RemoteCommandResult pollRemoteCommand(const std::string& serverUrl) {
     const std::string endpoint = serverEndpoint(serverUrl, "/api/reader/commands/next");
     curl_easy_setopt(client, CURLOPT_URL, endpoint.c_str());
     curl_easy_setopt(client, CURLOPT_POST, 1L);
-    curl_easy_setopt(client, CURLOPT_POSTFIELDS, "");
+    const std::string requestBody = "controller_id=" + gControllerId;
+    curl_easy_setopt(client, CURLOPT_POSTFIELDS, requestBody.c_str());
     curl_easy_setopt(client, CURLOPT_CONNECTTIMEOUT_MS, 3000L);
     curl_easy_setopt(client, CURLOPT_TIMEOUT_MS, 10000L);
     curl_easy_setopt(client, CURLOPT_WRITEFUNCTION, appendHttpResponse);
@@ -1047,6 +1093,9 @@ bool reportRemoteCommand(
     part = curl_mime_addpart(form);
     curl_mime_name(part, "message");
     curl_mime_data(part, message.c_str(), CURL_ZERO_TERMINATED);
+    part = curl_mime_addpart(form);
+    curl_mime_name(part, "controller_id");
+    curl_mime_data(part, gControllerId.c_str(), CURL_ZERO_TERMINATED);
     if (!responseData.empty()) {
         part = curl_mime_addpart(form);
         curl_mime_name(part, "response_data");
@@ -2352,6 +2401,7 @@ int runCamera(
 #endif
 
 int main(int argc, char** argv) {
+    gControllerId = controllerIdentity();
 #ifdef PLATE_ENABLE_CAMERA
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
         std::cerr << "Unable to initialize the HTTP client runtime.\n";
