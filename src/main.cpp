@@ -781,6 +781,7 @@ std::string serverEndpoint(const std::string& serverUrl, const std::string& path
 bool sendControllerStatus(
     const std::string& serverUrl,
     bool cameraConnected,
+    bool rfidConnected,
     bool loopActive,
     bool irBlocked,
     bool barrierOpen,
@@ -801,6 +802,7 @@ bool sendControllerStatus(
     };
     const auto booleanText = [](bool value) { return value ? "1" : "0"; };
     addField("camera_connected", booleanText(cameraConnected));
+    addField("rfid_connected", booleanText(rfidConnected));
     addField("controller_id", gControllerId);
     addField("loop_active", booleanText(loopActive));
     addField("ir_blocked", booleanText(irBlocked));
@@ -1355,6 +1357,7 @@ int runCamera(
 
     std::unique_ptr<gate::Controller> gateController;
     bool rfidEnabled = false;
+    bool rfidConnected = false;
 #ifdef PLATE_ENABLE_GPIO
     std::unique_ptr<gate::RaspberryPiGpio> gateGpio;
     std::unique_ptr<gate::SerialRfidReader> serialRfidReader;
@@ -1468,9 +1471,11 @@ int runCamera(
                 static_cast<std::size_t>(configuredRfidTagBytes),
                 rfidProtocol
             );
-            const std::string initializationError = serialRfidReader->initialize(
-                std::chrono::milliseconds(2000)
-            );
+            const std::string initializationError =
+                rfidProtocol == gate::RfidProtocol::UhfReader18
+                    ? serialRfidReader->initialize(std::chrono::milliseconds(2000))
+                    : serialRfidReader->discardPending();
+            rfidConnected = initializationError.empty();
             if (!initializationError.empty()) {
                 std::cerr << "RFID INITIALIZATION WARNING: "
                           << initializationError
@@ -1556,6 +1561,7 @@ int runCamera(
             sendControllerStatus,
             serverUrl,
             telemetryCameraConnected,
+            rfidConnected,
             telemetryLoopActive,
             telemetryIrBlocked,
             telemetryBarrierOpen,
