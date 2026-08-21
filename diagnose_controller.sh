@@ -232,7 +232,7 @@ if [[ -z "$server_url" ]]; then
     fail "PLATE_SERVER_URL is not configured."
     hint "Run controller -configure after Plate Program is available."
 else
-    curl --fail --silent --show-error --connect-timeout 2 --max-time 4 \
+    curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
         "$server_url/health" >/dev/null 2>&1
     server_status=$?
     if ((server_status == 0)); then

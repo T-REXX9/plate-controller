@@ -109,7 +109,7 @@ export PLATE_SERVER_URL CAMERA_INDEX CAMERA_WIDTH CAMERA_HEIGHT CAMERA_FPS \
 mkdir -p "$PLATE_OUTPUT_DIR"
 
 server_available=0
-if curl --fail --silent --show-error --connect-timeout 3 --max-time 5 \
+if curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
     "$PLATE_SERVER_URL/health" >/dev/null; then
     server_available=1
 fi

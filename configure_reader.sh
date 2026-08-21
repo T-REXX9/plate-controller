@@ -209,7 +209,7 @@ if [[ "$uart_reboot_required" == "1" ]]; then
     echo "UART configuration was updated. Reboot the Raspberry Pi before testing RFID."
 fi
 
-if curl --fail --silent --show-error --connect-timeout 3 --max-time 5 \
+if curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
     "$server_url/health" >/dev/null; then
     echo "Website connection successful. Reader configuration saved to .env."
 else

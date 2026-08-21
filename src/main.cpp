@@ -728,8 +728,8 @@ bool sendRecognition(
 
     curl_easy_setopt(client, CURLOPT_URL, endpoint.c_str());
     curl_easy_setopt(client, CURLOPT_MIMEPOST, form);
-    curl_easy_setopt(client, CURLOPT_CONNECTTIMEOUT_MS, 3000L);
-    curl_easy_setopt(client, CURLOPT_TIMEOUT_MS, 15000L);
+    curl_easy_setopt(client, CURLOPT_CONNECTTIMEOUT_MS, 5000L);
+    curl_easy_setopt(client, CURLOPT_TIMEOUT_MS, 30000L);
     curl_easy_setopt(client, CURLOPT_WRITEFUNCTION, appendHttpResponse);
     curl_easy_setopt(client, CURLOPT_WRITEDATA, &responseBody);
 
@@ -814,8 +814,11 @@ bool sendControllerStatus(
     std::string responseBody;
     curl_easy_setopt(client, CURLOPT_URL, endpoint.c_str());
     curl_easy_setopt(client, CURLOPT_MIMEPOST, form);
-    curl_easy_setopt(client, CURLOPT_CONNECTTIMEOUT_MS, 500L);
-    curl_easy_setopt(client, CURLOPT_TIMEOUT_MS, 1000L);
+    // A Cloudflare Tunnel may need more than one second for DNS, TLS, tunnel
+    // routing, and the origin response. Telemetry runs asynchronously, so a
+    // larger connection window does not block gate control or camera capture.
+    curl_easy_setopt(client, CURLOPT_CONNECTTIMEOUT_MS, 5000L);
+    curl_easy_setopt(client, CURLOPT_TIMEOUT_MS, 10000L);
     curl_easy_setopt(client, CURLOPT_WRITEFUNCTION, appendHttpResponse);
     curl_easy_setopt(client, CURLOPT_WRITEDATA, &responseBody);
     const CURLcode result = curl_easy_perform(client);
@@ -840,8 +843,8 @@ bool serverHealthCheck(const std::string& serverUrl, std::string& errorMessage) 
     std::string responseBody;
     const std::string endpoint = serverEndpoint(serverUrl, "/health");
     curl_easy_setopt(client, CURLOPT_URL, endpoint.c_str());
-    curl_easy_setopt(client, CURLOPT_CONNECTTIMEOUT_MS, 2000L);
-    curl_easy_setopt(client, CURLOPT_TIMEOUT_MS, 4000L);
+    curl_easy_setopt(client, CURLOPT_CONNECTTIMEOUT_MS, 5000L);
+    curl_easy_setopt(client, CURLOPT_TIMEOUT_MS, 10000L);
     curl_easy_setopt(client, CURLOPT_WRITEFUNCTION, appendHttpResponse);
     curl_easy_setopt(client, CURLOPT_WRITEDATA, &responseBody);
     const CURLcode result = curl_easy_perform(client);
@@ -995,8 +998,8 @@ RemoteCommandResult pollRemoteCommand(const std::string& serverUrl) {
     curl_easy_setopt(client, CURLOPT_POST, 1L);
     const std::string requestBody = "controller_id=" + gControllerId;
     curl_easy_setopt(client, CURLOPT_POSTFIELDS, requestBody.c_str());
-    curl_easy_setopt(client, CURLOPT_CONNECTTIMEOUT_MS, 3000L);
-    curl_easy_setopt(client, CURLOPT_TIMEOUT_MS, 10000L);
+    curl_easy_setopt(client, CURLOPT_CONNECTTIMEOUT_MS, 5000L);
+    curl_easy_setopt(client, CURLOPT_TIMEOUT_MS, 15000L);
     curl_easy_setopt(client, CURLOPT_WRITEFUNCTION, appendHttpResponse);
     curl_easy_setopt(client, CURLOPT_WRITEDATA, &responseBody);
 
@@ -1124,8 +1127,8 @@ bool reportRemoteCommand(
     std::string responseBody;
     curl_easy_setopt(client, CURLOPT_URL, endpoint.c_str());
     curl_easy_setopt(client, CURLOPT_MIMEPOST, form);
-    curl_easy_setopt(client, CURLOPT_CONNECTTIMEOUT_MS, 3000L);
-    curl_easy_setopt(client, CURLOPT_TIMEOUT_MS, 10000L);
+    curl_easy_setopt(client, CURLOPT_CONNECTTIMEOUT_MS, 5000L);
+    curl_easy_setopt(client, CURLOPT_TIMEOUT_MS, 15000L);
     curl_easy_setopt(client, CURLOPT_WRITEFUNCTION, appendHttpResponse);
     curl_easy_setopt(client, CURLOPT_WRITEDATA, &responseBody);
     const CURLcode result = curl_easy_perform(client);
