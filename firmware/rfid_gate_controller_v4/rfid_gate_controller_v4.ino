@@ -636,6 +636,51 @@ void connectToPlateProgramNetwork() {
   plateProgramReachable = false;
 }
 
+bool testPlateProgramWifi(const String& ssid, const String& password) {
+  if (ssid.length() == 0) return false;
+
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.disconnect();
+  delay(100);
+  WiFi.begin(ssid.c_str(), password.c_str());
+
+  unsigned long startedAt = millis();
+  while (WiFi.status() != WL_CONNECTED &&
+         millis() - startedAt < PROGRAM_CONNECT_TIMEOUT_MS) {
+    updateStatusOutputs();
+    delay(50);
+    yield();
+  }
+  return WiFi.status() == WL_CONNECTED;
+}
+
+void handleWifiScan() {
+  if (!requireWebAuth()) return;
+
+  int networkCount = WiFi.scanNetworks(false, true);
+  if (networkCount < 0) {
+    server.send(503, "application/json", "{\"error\":\"Wi-Fi scan failed.\"}");
+    return;
+  }
+
+  String json = "[";
+  bool first = true;
+  for (int i = 0; i < networkCount; i++) {
+    String ssid = WiFi.SSID(i);
+    if (ssid.length() == 0) continue;
+    if (!first) json += ',';
+    json += "{\"ssid\":\"" + jsonEscape(ssid) + "\",\"rssi\":";
+    json += String(WiFi.RSSI(i));
+    json += ",\"secure\":";
+    json += WiFi.encryptionType(i) == ENC_TYPE_NONE ? "false" : "true";
+    json += "}";
+    first = false;
+  }
+  json += "]";
+  WiFi.scanDelete();
+  server.send(200, "application/json", json);
+}
+
 void maintainPlateProgramConnection() {
   if (operatingMode != MODE_PLATE_PROGRAM || WiFi.status() == WL_CONNECTED) return;
   if (millis() - lastProgramReconnectAt < PROGRAM_RECONNECT_MS) return;
@@ -1911,7 +1956,8 @@ String modeConfigurationPage(const String& message = "") {
     "input,select{width:100%;padding:11px;margin-top:6px;border:1px solid #cbd5e1;border-radius:8px;box-sizing:border-box}"
     "button,a{display:inline-block;margin-top:18px;padding:11px 15px;border:0;border-radius:8px;background:#2563eb;color:#fff;"
     "font-weight:700;text-decoration:none}.back{background:#475569}.note{background:#eff6ff;padding:12px;border-radius:9px;font-size:13px;line-height:1.5}"
-    ".message{background:#ecfdf5;color:#065f46;padding:10px;border-radius:8px}</style></head><body><div class='wrap'><div class='card'>"
+    ".message{background:#ecfdf5;color:#065f46;padding:10px;border-radius:8px}.wifi-status{display:block;margin-top:8px;font-size:13px}"
+    "</style></head><body><div class='wrap'><div class='card'>"
     "<h1>System Mode</h1>"
   );
   if (message.length() > 0) {
@@ -1925,8 +1971,10 @@ String modeConfigurationPage(const String& message = "") {
   page += operatingMode == MODE_STANDALONE
     ? "<option value='standalone' selected>Standalone</option><option value='plate-program'>Plate Program</option>"
     : "<option value='standalone'>Standalone</option><option value='plate-program' selected>Plate Program</option>";
-  page += "</select></label><label>Local Wi-Fi name (SSID)<input name='ssid' maxlength='32' value='" +
-          htmlEscape(programWifiSsid) + "'></label>";
+  page += "</select></label><label>Local Wi-Fi network<select id='ssid' name='ssid' data-current-ssid='" +
+          htmlEscape(programWifiSsid) + "'><option value=''>Scanning nearby networks...</option></select>"
+          "<button type='button' onclick='scanNetworks()'>Scan nearby Wi-Fi</button>"
+          "<span id='wifiStatus' class='wifi-status'>Choose the network connected to the server.</span></label>";
   page += F("<label>Local Wi-Fi password<input type='password' name='password' maxlength='64' placeholder='Leave blank to keep saved password'></label>");
   page += "<label>Plate Program address<input name='program_url' maxlength='120' value='" +
           htmlEscape(plateProgramBaseUrl) + "' placeholder='https://server.example.com'></label>";
@@ -1934,7 +1982,17 @@ String modeConfigurationPage(const String& message = "") {
           htmlEscape(controllerId) + "' placeholder='Copy from Plate Program Sites'></label>";
   page += F("<label>Controller key<input type='password' name='controller_key' maxlength='160' "
             "placeholder='Leave blank to keep saved key'></label>");
-  page += F("<button type='submit'>Save and restart</button> <a class='back' href='/'>Back</a></form></div></div></body></html>");
+  page += F(
+    "<button type='submit'>Test connection and save</button> <a class='back' href='/'>Back</a>"
+    "<script>const ssidSelect=document.getElementById('ssid'),wifiStatus=document.getElementById('wifiStatus');"
+    "async function scanNetworks(){wifiStatus.textContent='Scanning nearby Wi-Fi...';ssidSelect.innerHTML='<option value=\"\">Scanning...</option>';"
+    "try{const response=await fetch('/wifi-scan',{cache:'no-store'});if(!response.ok)throw new Error();const networks=await response.json();"
+    "const current=ssidSelect.dataset.currentSsid;ssidSelect.innerHTML='';networks.forEach(n=>{const o=document.createElement('option');o.value=n.ssid;o.textContent=n.ssid+' ('+n.rssi+' dBm'+(n.secure?', secured':'')+')';ssidSelect.appendChild(o)});"
+    "if(current&&!networks.some(n=>n.ssid===current)){const o=document.createElement('option');o.value=current;o.textContent=current+' (saved)';ssidSelect.appendChild(o)};"
+    "if(current)ssidSelect.value=current;if(!networks.length&&!current)ssidSelect.innerHTML='<option value=\"\">No networks found</option>';"
+    "wifiStatus.textContent=networks.length+' network'+(networks.length===1?'':'s')+' found.'}catch(e){ssidSelect.innerHTML='<option value=\"\">Scan failed</option>';wifiStatus.textContent='Scan failed. Try again.'}}"
+    "scanNetworks();</script></form></div></div></body></html>"
+  );
   return page;
 }
 
@@ -1971,6 +2029,27 @@ void handleModeConfiguration() {
   if (password.length() == 0) password = programWifiPassword;
   String submittedControllerKey = server.arg("controller_key");
   if (submittedControllerKey.length() == 0) submittedControllerKey = controllerKey;
+
+  if (requestedMode == MODE_PLATE_PROGRAM &&
+      (server.arg("ssid").length() == 0 ||
+       (!server.arg("program_url").startsWith("http://") &&
+        !server.arg("program_url").startsWith("https://")) ||
+       server.arg("controller_id").length() == 0 ||
+       submittedControllerKey.length() == 0)) {
+    server.send(400, "text/html", modeConfigurationPage(
+      "Select a Wi-Fi network and complete the server/controller fields."
+    ));
+    return;
+  }
+
+  if (requestedMode == MODE_PLATE_PROGRAM &&
+      !testPlateProgramWifi(server.arg("ssid"), password)) {
+    server.send(400, "text/html", modeConfigurationPage(
+      "Could not connect to that Wi-Fi network. Check the password and try again."
+    ));
+    return;
+  }
+
   if (!saveModeConfiguration(
         requestedMode,
         server.arg("ssid"),
@@ -2236,6 +2315,7 @@ void setupWebServer() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/mode", HTTP_GET, handleModeConfiguration);
   server.on("/mode", HTTP_POST, handleModeConfiguration);
+  server.on("/wifi-scan", HTTP_GET, handleWifiScan);
   server.on("/status", HTTP_GET, handleStatus);
   server.on("/sync-time", HTTP_POST, handleSyncTime);
   server.on("/enroll", HTTP_POST, handleEnroll);
