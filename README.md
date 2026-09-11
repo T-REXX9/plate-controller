@@ -1,251 +1,69 @@
-# Raspberry Pi Plate Reader
+# ESP8266 NodeMCU Gate Firmware
 
-This repository contains the lightweight Raspberry Pi side of the plate access
-control system. The Pi performs only camera capture, YOLO plate detection,
-crop/enhancement, and PP-OCRv5 recognition. It sends each result immediately to
-the separate PC web server and does not host a website or database.
+This repository contains the ESP8266/NodeMCU firmware for the Plate Program
+gate controller. The controller is responsible for the physical gate only:
 
-## Recognition workflow
+- inductive-loop vehicle detection
+- RFID reader communication
+- IR safety beam monitoring
+- boom-barrier relay control
+- red/green traffic signals
+- fail-closed gate state management
 
-1. Keep the camera open while YOLO and OCR remain idle.
-2. Wait for an administrator to press **Capture plate** on the PC dashboard.
-3. Acquire two fresh full-resolution frames, run YOLO at 60% minimum confidence,
-   and evaluate the strongest crops with PP-OCRv5.
-4. Return immediately when the first plate crop and OCR probabilities are strong.
-5. When uncertain, acquire one more frame and use two-sample OCR consensus.
-6. Return the final clean alphanumeric value without imposing a plate format.
-7. Store only the winning enhanced crop in `Output/Plate-Crops`.
-8. Send the plate, detector confidence, crop, raw frame, and annotated frame to
-   the PC server. Raw and annotated frames are encoded in memory and are not
-   retained on the Raspberry Pi.
+The server is responsible for camera capture, YOLO plate detection, OCR,
+vehicle lookup, RFID/plate correlation, access history, and authorization.
+The controller never stores the server's vehicle database.
 
-## Boom-barrier control development
+## Firmware
 
-The safety state machine and macOS/Raspberry Pi simulator are now included.
-They implement the cycle lock, authorization/denial paths, one-second open and
-close pulses, passage clearance, obstruction reopening, waiting-vehicle
-behavior, the single LOW-red/HIGH-green traffic output, and an active-low RFID
-trigger synchronized with automatic camera capture.
-
-Build and run the simulator:
-
-```bash
-cmake -S . -B build -DPLATE_ENABLE_CAMERA=ON -DBUILD_TESTING=ON
-cmake --build build --parallel 2
-ctest --test-dir build --output-on-failure
-./build/gate_simulator
-```
-
-The switch connections and GPIO assignments are documented
-in [`docs/GATE_WIRING_DIAGRAM.md`](docs/GATE_WIRING_DIAGRAM.md). Physical GPIO
-movement remains disabled until `GATE_MODE=1` is set in the private `.env`.
-
-After wiring, enable the automatic inductive-loop sequence by editing `.env`:
+Open this file in Arduino IDE or PlatformIO:
 
 ```text
-GATE_MODE=1
+firmware/rfid_gate_controller_v4/rfid_gate_controller_v4.ino
 ```
 
-`./start_reader.sh` will then wait for BCM17 to be shorted to ground instead of
-waiting for the dashboard Capture button. BCM17 and BCM27 use internal pull-ups,
-so HIGH is idle and grounded LOW means vehicle present or IR beam broken.
+Select an ESP8266 NodeMCU board, configure the pin assignments and RFID reader
+settings near the top of the file, then upload it to the controller.
 
-Five active-high status indicators are available:
+## Server setup
 
-- Camera detected: BCM25, physical pin 22.
-- Server detected: BCM5, physical pin 29.
-- Loop detector active: BCM6, physical pin 31.
-- Boom barrier open: BCM12, physical pin 32.
-- Plate not recognized: BCM13, physical pin 33.
+Before configuring the controller, use the Plate Program web application:
 
-The controller also sends a lightweight one-second hardware heartbeat to Plate
-Program. Its dashboard mirrors the controller/server link, camera, inductive
-loop, IR safety beam, boom-barrier state, and red/green traffic output. Network
-reporting runs separately from the gate safety loop so a slow or unavailable PC
-cannot delay barrier control.
+1. Create or select the village and gate.
+2. Provision a controller as **Plate + RFID**.
+3. Copy the controller ID and one-time controller key.
+4. Bind an active network camera to the same gate.
 
-Plate Program's administrator-only Hardware page can request protected manual
-OPEN/CLOSE cycles and three-second red/green traffic-light tests. These commands
-are polled asynchronously. Manual barrier movement remains inside the normal
-state machine, and CLOSE is rejected or interrupted whenever the IR beam is
-blocked.
+The controller's local System Mode page requires:
 
-The Hardware page also provides an administrator-only RFID serial console. It
-can send validated HEX or plain-text commands with selectable baud rate, data
-bits, parity, stop bits, and read timeout. Controller-side locking prevents a
-debug transaction from interleaving bytes with an automatic RFID inventory.
+- Wi-Fi SSID and password
+- Plate Program URL, such as `https://server.example.com`
+- provisioned controller ID
+- one-time controller key
 
-The optional RFID reader is controlled entirely through `/dev/serial0` on
-physical pins 8/10. Its tag number is printed in the live controller log.
-These are 3.3 V UART pins, so a true RS-232 reader requires an RS-232-to-3.3 V
-TTL transceiver. The confirmed UHFReader18-compatible reader is placed in Answer
-Mode when the controller starts. On each loop-triggered cycle the controller sends
-`04 00 0F A5 A2`, validates the returned CRC, and uploads only the EPC bytes as
-uppercase hexadecimal without separators. Physical pin 36 is unused. A
-registered plate or an active RFID
-sticker independently authorizes the barrier; one credential does not fail merely
-because the other is absent or unknown. When RFID is disabled, plate-only
-authorization remains active. During `controller -configure`, enter the
-reader's current baud rate and accept the initialization prompt. The setup
-verifies communication, changes the reader to 9600 baud when necessary, sends
-the complete Answer Mode configuration, reads the work mode back, and saves
-RFID configuration only after those checks pass. If UART boot configuration was
-just enabled and `/dev/serial0` is not available yet, reboot and run
-`controller -configure` again.
+The key is sent in the `X-Controller-Key` header. The server resolves the
+controller to its gate and village; the firmware does not submit or choose
+those IDs.
 
-Each LED requires its own 220–330 Ω series resistor. Complete wiring and
-indicator behavior are documented in
-[`docs/GATE_WIRING_DIAGRAM.md`](docs/GATE_WIRING_DIAGRAM.md).
+## Access flow
 
-## Raspberry Pi 4 setup
+When the loop reports a vehicle, the controller creates a capture attempt and
+triggers the RFID reader. The server captures the gate-bound camera, runs YOLO
+and OCR, combines the plate and RFID evidence, records one access event, and
+returns the authorization decision. The controller opens the barrier only for
+an authorized result and keeps it closed on timeout, denial, or communication
+failure.
 
-For a completely fresh 64-bit Raspberry Pi OS installation, run this single
-command:
+Either a valid plate or a valid RFID may authorize access. A late second
+credential is correlated with the same server-side attempt and history event.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/T-REXX9/plate-controller/main/install_controller.sh -o /tmp/install-controller.sh && sudo bash /tmp/install-controller.sh
-```
+## Documentation
 
-The guided installer asks whether the separate PC server is already installed.
-When it is available, the installer scans the Pi's local `/24` network for the
-plate-program identity and health endpoint, asks for the camera, builds
-and tests everything, installs GPIO, video, and UART permissions, and starts the reader as a
-background system service. It supports both Raspberry Pi OS Bookworm and Trixie;
-if the operating system's OpenCV is too old, it builds the required minimal
-OpenCV 4.10 installation automatically. Long compiler output is kept out of the
-terminal and saved to `/var/log/plate-controller-install.log`; if setup fails,
-the installer prints the useful final part of that log automatically.
+- `docs/GATE_WIRING_DIAGRAM.md` — ESP8266 pin and gate wiring
+- `docs/GATE_CONTROL_PLAN.md` — safety state machine and timing
+- `docs/RFID_READER_README.md` — RFID reader operation
+- `docs/RFID_READER_COMMAND_MANUAL.md` — reader command details
+- `docs/HQ_SERVER_PLAN.md` — future centralized fleet-management planning
 
-If the PC server has not been installed yet, the Pi setup still completes but
-leaves the controller safely stopped. After setting up the server, run:
-
-```bash
-controller -configure
-```
-
-No project-directory knowledge is needed afterward. Common commands are:
-
-```bash
-controller -status
-controller -logs
-controller -diagnose
-controller -update
-controller -restart
-controller -stop
-controller -start
-```
-
-`controller -diagnose` requires confirmation before temporarily stopping the
-service, then checks the USB camera identity and test frame, Plate Program server,
-inductive-loop input, and IR-beam input. It separately warns the operator and
-requires the exact confirmation `ACTIVATE` before running a physical barrier
-open/close test. If that test is interrupted or the IR beam is broken while
-closing, the barrier reopens and the controller remains stopped for inspection.
-
-`controller -update` stops the service, fast-forwards the managed clone from the
-GitHub `main` branch, rebuilds and tests it, refreshes the service installation,
-and starts it again. A failed build automatically restores the last working
-revision.
-
-The older `./build_raspberry_pi.sh` command remains available for developers who
-already cloned and configured the repository manually.
-
-## Connect it to the PC server
-
-Start the separate `plate-program` project on the PC. That website
-uses native MySQL locally; the Pi never connects to MySQL. It sends recognition
-results to the Flask API over the trusted local network.
-
-On the Raspberry Pi, run:
-
-```bash
-./configure_reader.sh
-```
-
-The setup searches the local network for the website. Confirm the discovered
-address or enter one such as `http://192.168.0.103:8080`, then choose the USB
-camera index. The controller requests the webcam's 3840×2160 MJPEG mode at
-30 FPS and prints both the requested and actually negotiated camera modes when
-it starts. The 4K source frame is retained through plate detection and cropping,
-so OCR receives the maximum plate detail even though YOLO uses its trained
-640×640 inference input. These defaults match the EMEET C950 4K's advertised
-4K/30 FPS mode, and the controller explicitly enables the camera's autofocus.
-The configuration is stored in a
-private `.env` file that Git ignores. The setup checks the website health route
-before accepting the configuration.
-
-The defaults can be changed in the private controller configuration when a
-camera requires a different mode:
-
-```text
-CAMERA_WIDTH=3840
-CAMERA_HEIGHT=2160
-CAMERA_FPS=30
-CAMERA_FOURCC=MJPG
-```
-
-On Raspberry Pi OS, list the exact modes exposed by the selected USB camera
-with:
-
-```bash
-v4l2-ctl --device /dev/video0 --list-formats-ext
-```
-
-Start the reader with:
-
-```bash
-./start_reader.sh
-```
-
-The launcher checks the PC website before opening the camera, then polls its
-capture queue while inference stays idle.
-
-To test only the PC connection without opening the camera:
-
-```bash
-./start_reader.sh --check
-```
-
-Press **Capture plate** on the administrator dashboard. The Pi terminal prints
-whether the one-frame fast path or two-frame fallback was used, the final
-plate, web server response, and a timing summary for frame capture, YOLO, OCR,
-upload, and total processing time.
-
-For temporary maintenance, the server address can be supplied as an environment
-variable:
-
-```bash
-PLATE_SERVER_URL=http://192.168.0.103:8080 \
-./build-pi/plate_reader --camera 0 \
-  models/license_plate_detector.onnx \
-  models/en_PP-OCRv5_rec_mobile.onnx \
-  Output --headless
-```
-
-The interactive configuration script is preferred because it validates the
-server connection and camera selection.
-
-## macOS build
-
-```bash
-brew install cmake opencv curl
-cmake -S . -B build -DPLATE_ENABLE_CAMERA=ON
-cmake --build build -j
-```
-
-Run `./configure_reader.sh`, followed by `./start_reader.sh`. The launcher
-automatically chooses the macOS build. Camera access must be allowed for Terminal.
-
-## Process an image folder
-
-Folder mode remains available and does not contact the server:
-
-```bash
-./build/plate_reader raw-images Output models/license_plate_detector.onnx
-```
-
-Annotated images are written to `Output`, and enhanced plate crops are written
-to `Output/Plate-Crops`.
-
-Models are included so the Pi can run YOLO and OCR locally without Python,
-EasyOCR, Tesseract, or an internet connection.
+The former Raspberry Pi camera reader and C++ recognition implementation are
+not part of this repository's production controller path.
